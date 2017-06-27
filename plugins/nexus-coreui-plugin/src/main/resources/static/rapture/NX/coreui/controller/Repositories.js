@@ -66,12 +66,17 @@ Ext.define('NX.coreui.controller.Repositories', {
     'repository.recipe.DockerGroup',
     'repository.recipe.DockerProxy',
     'repository.recipe.PyPiHosted',
-    'repository.recipe.PyPiProxy'
+    'repository.recipe.PyPiProxy',
+    'repository.recipe.PyPiGroup',
+    'repository.recipe.YumProxy',
+    'repository.recipe.GitLfsHosted'
   ],
   refs: [
     {ref: 'feature', selector: 'nx-coreui-repository-feature'},
+    {ref: 'content', selector: 'nx-feature-content'},
     {ref: 'list', selector: 'nx-coreui-repository-list'},
-    {ref: 'settings', selector: 'nx-coreui-repository-feature nx-coreui-repository-settings'}
+    {ref: 'settings', selector: 'nx-coreui-repository-feature nx-coreui-repository-settings'},
+    {ref: 'proxyFacetContentMaxAge', selector: 'nx-coreui-repository-add numberfield[name=attributes.proxy.contentMaxAge]'}
   ],
   icons: {
     'repository-hosted': {
@@ -87,27 +92,28 @@ Ext.define('NX.coreui.controller.Repositories', {
       variants: ['x16', 'x32']
     }
   },
-  features: {
-    mode: 'admin',
-    path: '/Repository/Repositories',
-    text: NX.I18n.get('Repositories_Text'),
-    description: NX.I18n.get('Repositories_Description'),
-    view: {xtype: 'nx-coreui-repository-feature'},
-    iconConfig: {
-      file: 'database.png',
-      variants: ['x16', 'x32']
-    },
-    visible: function () {
-      // Show feature if the current user is permitted any repository-admin permissions
-      return NX.Permissions.checkExistsWithPrefix('nexus:repository-admin');
-    }
-  },
 
   /**
    * @override
    */
   init: function () {
     var me = this;
+
+    me.features = {
+      mode: 'admin',
+      path: '/Repository/Repositories',
+      text: NX.I18n.get('Repositories_Text'),
+      description: NX.I18n.get('Repositories_Description'),
+      view: {xtype: 'nx-coreui-repository-feature'},
+      iconConfig: {
+        file: 'database.png',
+        variants: ['x16', 'x32']
+      },
+      visible: function() {
+        // Show feature if the current user is permitted any repository-admin permissions
+        return NX.Permissions.checkExistsWithPrefix('nexus:repository-admin');
+      }
+    };
 
     me.callParent();
 
@@ -147,6 +153,9 @@ Ext.define('NX.coreui.controller.Repositories', {
         },
         'nx-coreui-repository-selectrecipe': {
           cellclick: me.showAddRepositoryPanel
+        },
+        'nx-coreui-repository-feature combo[name=attributes.maven.versionPolicy]' : {
+          change: me.handleMaven2VersionPolicyChange
         }
       }
     });
@@ -231,6 +240,45 @@ Ext.define('NX.coreui.controller.Repositories', {
       me.setItemName(2, NX.I18n.format('Repositories_Create_Title', model.get('name')));
       me.setItemClass(2, NX.Icons.cls('repository-hosted', 'x16'));
       me.loadCreateWizard(2, true, {xtype: 'nx-coreui-repository-add', recipe: model});
+      if (model.getId() === 'maven2-proxy') {
+        me.cleanUpdateProxyFacetContentMaxAge(-1);
+      }
+    }
+  },
+
+  /**
+   * Updates the 'originalValue' of the proxyFacetContentMaxAge input and resets it so the field is not dirty.
+   * @param newValue
+   */
+  cleanUpdateProxyFacetContentMaxAge: function(newValue) {
+    var me = this,
+        proxyFacetContentMaxAge = me.getProxyFacetContentMaxAge();
+
+    proxyFacetContentMaxAge.originalValue = newValue;
+    proxyFacetContentMaxAge.reset();
+  },
+
+  /**
+   * @private
+   * Update The maximum component age in the proxy facet based on the selected version policy, but do not update if the
+   * user has entered a value.
+   */
+  handleMaven2VersionPolicyChange: function(element, newValue) {
+    var me = this;
+
+    var proxyFacetContentMaxAge = me.getProxyFacetContentMaxAge();
+
+    if (proxyFacetContentMaxAge && !proxyFacetContentMaxAge.isDirty()) {
+      switch (newValue) {
+        case 'RELEASE':
+          me.cleanUpdateProxyFacetContentMaxAge(-1);
+          break;
+        case 'SNAPSHOT':
+          me.cleanUpdateProxyFacetContentMaxAge(1440);
+          break;
+        default:
+          //no change
+      }
     }
   },
 
@@ -241,7 +289,9 @@ Ext.define('NX.coreui.controller.Repositories', {
     var me = this,
         description = me.getDescription(model);
 
+    me.getContent().getEl().mask(NX.I18n.get('Repositories_Delete_Mask'));
     NX.direct.coreui_Repository.remove(model.getId(), function (response) {
+      me.getContent().getEl().unmask();
       me.getStore('Repository').load();
       if (Ext.isObject(response) && response.success) {
         NX.Messages.add({text: 'Repository deleted: ' + description, type: 'success'});

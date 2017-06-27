@@ -28,6 +28,7 @@ import org.sonatype.nexus.repository.Repository;
 import org.sonatype.nexus.transaction.Transaction;
 
 import com.google.common.base.Supplier;
+import com.google.common.hash.HashCode;
 import com.orientechnologies.orient.core.db.document.ODatabaseDocumentTx;
 import com.orientechnologies.orient.core.record.impl.ODocument;
 
@@ -87,6 +88,12 @@ public interface StorageTx
   Bucket findBucket(Repository repository);
 
   /**
+   * Finds buckets based on the repositories.
+   */
+  @Nullable
+  Iterable<Bucket> findBuckets(final Iterable<Repository> repositories);
+
+  /**
    * Gets all buckets.
    */
   Iterable<Bucket> browseBuckets();
@@ -108,6 +115,7 @@ public interface StorageTx
   /**
    * Gets first asset owned by the specified component.
    */
+  @Nullable
   Asset firstAsset(Component component);
 
   /**
@@ -181,7 +189,13 @@ public interface StorageTx
    * Gets a component by id, owned by the specified bucket, or {@code null} if not found.
    */
   @Nullable
-  Component findComponent(EntityId id, Bucket bucket);
+  Component findComponentInBucket(EntityId id, Bucket bucket);
+
+  /**
+   * Gets a component by id, regardless of which bucket it resides in, or {@code null} if not found.
+   */
+  @Nullable
+  Component findComponent(EntityId id);
 
   /**
    * Gets a component by some identifying property, or {@code null} if not found.
@@ -215,6 +229,20 @@ public interface StorageTx
    *                     by repository (unless passed in query limits already).
    */
   Iterable<Component> findComponents(Query query, @Nullable Iterable<Repository> repositories);
+
+  /**
+   * Gets all components with a given name, compared case-insensitively.
+   *
+   * @param name         the component name.
+   * @param repositories the repositories to limit the results to. If null or empty, results won't be limited
+   *                     by repository.
+   * @param querySuffix  the part of the query after the where clause
+   *
+   * @since 3.3
+   */
+  Iterable<Component> findComponentsByNameCaseInsensitive(String name,
+                                                          @Nullable Iterable<Repository> repositories,
+                                                          @Nullable String querySuffix);
 
   /**
    * Gets the number of components matching the given where clause.
@@ -270,15 +298,6 @@ public interface StorageTx
   void deleteAsset(Asset asset);
 
   /**
-   * Deletes an existing bucket and all components and assets within.
-   *
-   * NOTE: This is a potentially long-lived and non-atomic operation. Items within the bucket will be
-   * sequentially deleted in batches in order to keep memory use within reason. This method will automatically
-   * commit a transaction for each batch, and will return after committing the last batch.
-   */
-  void deleteBucket(Bucket bucket);
-
-  /**
    * Creates a new Blob and updates the given asset with a reference to it, hash metadata, size, and content type.
    * The old blob, if any, will be deleted.
    *
@@ -314,19 +333,34 @@ public interface StorageTx
    * @param blobName                blob name (may not be unique), but it will be used also in content validation.
    *                                See {@link ContentValidator}.
    * @param sourceFile              the source file path of the content being stored as a blob
-   * @param hashAlgorithms          {@link HashAlgorithm}s to be applied while streaming to blob store, will be set
-   *                                in {@link Asset} attributes.
+   * @param hashes                  precalculated {@link HashAlgorithm}s and {@link HashCode}s for {@link AssetBlob}.
    * @param headers                 optional, custom headers for blob, if any.
    * @param declaredContentType     the declared MIME type of the blob. See {@link ContentValidator}.
+   * @param size                    precalculated size for the blob
    * @return Attached instance of {@link AssetBlob} of the newly created blob. As side effect, passed in {@link Asset}
    * is modified too, but is unsaved. Caller must ensure {@link #saveAsset(Asset)} is invoked before this TX ends.
    */
   AssetBlob setBlob(Asset asset,
                     String blobName,
                     Path sourceFile,
-                    Iterable<HashAlgorithm> hashAlgorithms,
+                    Map<HashAlgorithm, HashCode> hashes,
                     @Nullable Map<String, String> headers,
-                    String declaredContentType) throws IOException;
+                    String declaredContentType,
+                    long size) throws IOException;
+
+  /**
+   * Creates a new Blob by hard linking to a {@code TempBlob} and returns its {@link AssetBlob}. Otherwise behaves as
+   * the other {@code setBlob()} methods.
+   *
+   * @since 3.1
+   */
+  AssetBlob setBlob(Asset asset,
+                    String blobName,
+                    TempBlob originalBlob,
+                    @Nullable Map<String, String> headers,
+                    @Nullable String declaredContentType,
+                    boolean skipContentVerification)
+      throws IOException;
 
   /**
    * Creates a new Blob and returns its {@link AssetBlob}. Blobs created but not attached in a scope of a TX to any
@@ -363,19 +397,32 @@ public interface StorageTx
    * @param blobName                blob name (may not be unique), but it will be used also in content validation. See
    *                                {@link ContentValidator}.
    * @param sourceFile              the source file path of the content to be included in blob store.
-   * @param hashAlgorithms          {@link HashAlgorithm}s to be applied while streaming to blob store, returned in
-   *                                {@link
-   *                                AssetBlob}.
+   * @param hashes                  precalculated {@link HashAlgorithm}s and {@link HashCode}s for {@link AssetBlob}.
    * @param headers                 optional, custom headers for blob, if any.
    * @param declaredContentType     the declared MIME type of the blob. See {@link ContentValidator}.
+   * @param size                    precalculated size for the blob
    * @return Unattached instance of {@link AssetBlob} that should be attached to some {@link Asset} during this
    * transaction using {@link #attachBlob(Asset, AssetBlob)} method.
    */
   AssetBlob createBlob(String blobName,
                        Path sourceFile,
-                       Iterable<HashAlgorithm> hashAlgorithms,
+                       Map<HashAlgorithm, HashCode> hashes,
                        @Nullable Map<String, String> headers,
-                       String declaredContentType) throws IOException;
+                       String declaredContentType,
+                       long size) throws IOException;
+
+  /**
+   * Creates a new Blob by hard linking to a {@code TempBlob} and returns its {@link AssetBlob}. Otherwise behaves as
+   * the other {@code createBlob()} methods.
+   *
+   * @since 3.1
+   */
+  AssetBlob createBlob(String blobName,
+                       TempBlob originalBlob,
+                       @Nullable Map<String, String> headers,
+                       @Nullable String declaredContentType,
+                       boolean skipContentVerification)
+      throws IOException;
 
   /**
    * Attaches a Blob to asset and updates the given asset with a reference to it, hash metadata, size, and content
@@ -390,7 +437,9 @@ public interface StorageTx
   Blob getBlob(BlobRef blobRef);
 
   /**
-   * Gets a Blob, or throws an {@code IllegalStateException} if it doesn't exist.
+   * Requires that a Blob exists in the blobstore.
+   *
+   * @throws MissingBlobException if the blob is missing
    */
   Blob requireBlob(BlobRef blobRef);
 }

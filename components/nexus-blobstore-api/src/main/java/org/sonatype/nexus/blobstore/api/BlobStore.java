@@ -15,11 +15,13 @@ package org.sonatype.nexus.blobstore.api;
 import java.io.InputStream;
 import java.nio.file.Path;
 import java.util.Map;
+import java.util.stream.Stream;
 
 import javax.annotation.Nullable;
 
 import org.sonatype.goodies.lifecycle.Lifecycle;
-import org.sonatype.nexus.common.collect.AutoClosableIterable;
+
+import com.google.common.hash.HashCode;
 
 /**
  * A generic storage bin for binary objects of all sizes.
@@ -48,6 +50,12 @@ public interface BlobStore
   String CREATED_BY_HEADER = "BlobStore.created-by";
 
   /**
+   * Header whose presence indicates a temporary blob (may be handled differently by the underlying implementation).
+   * @since 3.1
+   */
+  String TEMPORARY_BLOB_HEADER = "BlobStore.temporary-blob";
+
+  /**
    * Creates a new blob. The header map must contain at least two keys:
    *
    * <ul>
@@ -64,9 +72,20 @@ public interface BlobStore
    * Imports a blob by creating a hard link, throwing {@link BlobStoreException} if that's not supported
    * from the source file's location.
    *
-   * Otherwise behaves as {@link #create(InputStream, Map)}.
+   * Otherwise similar to {@link #create(InputStream, Map)} with the difference that a known file size and sha1 are
+   * already provided.
+   *
+   * @since 3.1
    */
-  Blob create(Path sourceFile, Map<String, String> headers);
+  Blob create(Path sourceFile, Map<String, String> headers, long size, HashCode sha1);
+
+  /**
+   * Duplicates a blob within the blob store by copying the temp blob but with the provided headers. The blob must be
+   * in this blob store; moving blobs between blob stores is not supported.
+   *
+   * @since 3.1
+   */
+  Blob copy(BlobId blobId, Map<String, String> headers);
 
   /**
    * Returns the corresponding {@link Blob}, or {@code null} if the  blob does not exist or has been {@link #delete
@@ -81,7 +100,7 @@ public interface BlobStore
    *
    * @return {@code true} if the blob has been deleted, {@code false} if no blob was found by that ID.
    */
-  boolean delete(BlobId blobId);
+  boolean delete(BlobId blobId, String reason);
 
   /**
    * Removes a blob from the blob store immediately, disregarding any locking or concurrent access by other threads.
@@ -95,17 +114,6 @@ public interface BlobStore
    * Provides metrics about the BlobStore's usage.
    */
   BlobStoreMetrics getMetrics();
-
-  /**
-   * Installs a listener to receive blob store events. Subsequent calls replace the listener.
-   */
-  void setBlobStoreListener(@Nullable BlobStoreListener listener);
-
-  /**
-   * Returns whatever BlobStoreListener has been installed, or {@code null}.
-   */
-  @Nullable
-  BlobStoreListener getBlobStoreListener();
 
   /**
    * Perform garbage collection, purging blobs marked for deletion or whatever other periodic, implementation-specific
@@ -124,14 +132,17 @@ public interface BlobStore
   void init(BlobStoreConfiguration configuration) throws Exception;
 
   /**
-   * Returns an Iterable of BlobIds.
-   *
-   * @return Iterable handle must be closed when finished using it.
-   */
-  AutoClosableIterable<BlobId> iterator();
-
-  /**
    * Signifies that the {@link BlobStoreManager} has permanently deleted this blob store.
    */
   void remove();
+
+  /**
+   * Get a {@link Stream} of {@link BlobId} for blobs contained in this blob store.
+   */
+  Stream<BlobId> getBlobIdStream();
+
+  /**
+   * Get {@link BlobAttributes} for the {@link BlobId} provided.
+   */
+  BlobAttributes getBlobAttributes(BlobId blobId);
 }

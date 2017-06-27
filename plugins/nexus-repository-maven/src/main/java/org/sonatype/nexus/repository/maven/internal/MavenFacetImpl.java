@@ -13,7 +13,6 @@
 package org.sonatype.nexus.repository.maven.internal;
 
 import java.io.IOException;
-import java.io.InputStream;
 import java.nio.file.Path;
 import java.util.Map;
 
@@ -27,16 +26,16 @@ import javax.validation.groups.Default;
 import org.sonatype.nexus.blobstore.api.Blob;
 import org.sonatype.nexus.common.collect.AttributesMap;
 import org.sonatype.nexus.common.collect.NestedAttributesMap;
-import org.sonatype.nexus.common.io.TempStreamSupplier;
+import org.sonatype.nexus.common.hash.HashAlgorithm;
 import org.sonatype.nexus.repository.FacetSupport;
 import org.sonatype.nexus.repository.config.Configuration;
 import org.sonatype.nexus.repository.config.ConfigurationFacet;
+import org.sonatype.nexus.repository.maven.LayoutPolicy;
 import org.sonatype.nexus.repository.maven.MavenFacet;
 import org.sonatype.nexus.repository.maven.MavenPath;
 import org.sonatype.nexus.repository.maven.MavenPath.Coordinates;
 import org.sonatype.nexus.repository.maven.MavenPath.HashType;
 import org.sonatype.nexus.repository.maven.MavenPathParser;
-import org.sonatype.nexus.repository.maven.LayoutPolicy;
 import org.sonatype.nexus.repository.maven.VersionPolicy;
 import org.sonatype.nexus.repository.storage.Asset;
 import org.sonatype.nexus.repository.storage.AssetBlob;
@@ -44,18 +43,20 @@ import org.sonatype.nexus.repository.storage.Bucket;
 import org.sonatype.nexus.repository.storage.Component;
 import org.sonatype.nexus.repository.storage.StorageFacet;
 import org.sonatype.nexus.repository.storage.StorageTx;
+import org.sonatype.nexus.repository.storage.TempBlob;
+import org.sonatype.nexus.repository.transaction.TransactionalDeleteBlob;
+import org.sonatype.nexus.repository.transaction.TransactionalStoreBlob;
+import org.sonatype.nexus.repository.transaction.TransactionalStoreMetadata;
+import org.sonatype.nexus.repository.transaction.TransactionalTouchBlob;
 import org.sonatype.nexus.repository.types.HostedType;
 import org.sonatype.nexus.repository.types.ProxyType;
 import org.sonatype.nexus.repository.view.Content;
 import org.sonatype.nexus.repository.view.Payload;
 import org.sonatype.nexus.repository.view.payloads.BlobPayload;
-import org.sonatype.nexus.transaction.Transactional;
 import org.sonatype.nexus.transaction.UnitOfWork;
 
 import com.google.common.annotations.VisibleForTesting;
-import com.google.common.base.Supplier;
-import com.orientechnologies.common.concur.ONeedRetryException;
-import com.orientechnologies.orient.core.storage.ORecordDuplicatedException;
+import com.google.common.hash.HashCode;
 import org.apache.maven.model.Model;
 
 import static com.google.common.base.Preconditions.checkNotNull;
@@ -165,7 +166,7 @@ public class MavenFacetImpl
 
   @Nullable
   @Override
-  @Transactional(retryOn = IllegalStateException.class, swallow = ONeedRetryException.class)
+  @TransactionalTouchBlob
   public Content get(final MavenPath path) throws IOException {
     log.debug("GET {} : {}", getRepository().getName(), path.getPath());
 
@@ -175,7 +176,7 @@ public class MavenFacetImpl
     if (asset == null) {
       return null;
     }
-    if (asset.markAsAccessed()) {
+    if (asset.markAsDownloaded()) {
       tx.saveAsset(asset);
     }
 
@@ -196,8 +197,8 @@ public class MavenFacetImpl
   {
     log.debug("PUT {} : {}", getRepository().getName(), path.getPath());
 
-    try (TempStreamSupplier streamSupplier = new TempStreamSupplier(payload.openInputStream())) {
-      return doPut(path, payload, streamSupplier);
+    try (TempBlob tempBlob = storageFacet.createTempBlob(payload, HashType.ALGORITHMS)) {
+      return doPut(path, payload, tempBlob);
     }
   }
 
@@ -205,26 +206,37 @@ public class MavenFacetImpl
   public Content put(final MavenPath path,
                      final Path sourceFile,
                      final String contentType,
-                     final AttributesMap contentAttributes)
+                     final AttributesMap contentAttributes,
+                     final Map<HashAlgorithm, HashCode> hashes,
+                     final long size)
       throws IOException
   {
     log.debug("PUT {} : {}", getRepository().getName(), path.getPath());
 
-    return doPut(path, sourceFile, contentType, contentAttributes);
+    return doPut(path, sourceFile, contentType, contentAttributes, hashes, size);
   }
 
-  @Transactional(retryOn = {ONeedRetryException.class, ORecordDuplicatedException.class})
+  @Override
+  public Content put(final MavenPath path,
+                     final TempBlob blob,
+                     final String contentType,
+                     final AttributesMap contentAttributes)
+      throws IOException
+  {
+    return doPut(path, blob, contentType, contentAttributes);
+  }
+
+  @TransactionalStoreBlob
   protected Content doPut(final MavenPath path,
       final Payload payload,
-      final Supplier<InputStream> streamSupplier)
+      final TempBlob tempBlob)
       throws IOException
   {
     final StorageTx tx = UnitOfWork.currentTx();
 
     final AssetBlob assetBlob = tx.createBlob(
         path.getPath(),
-        streamSupplier,
-        HashType.ALGORITHMS,
+        tempBlob,
         null,
         payload.getContentType(),
         false
@@ -234,19 +246,16 @@ public class MavenFacetImpl
       contentAttributes = ((Content) payload).getAttributes();
     }
 
-    if (path.getCoordinates() != null) {
-      return toContent(putArtifact(tx, path, assetBlob, contentAttributes), assetBlob.getBlob());
-    }
-    else {
-      return toContent(putFile(tx, path, assetBlob, contentAttributes), assetBlob.getBlob());
-    }
+    return doPutAssetBlob(path, contentAttributes, tx, assetBlob);
   }
 
-  @Transactional(retryOn = {ONeedRetryException.class, ORecordDuplicatedException.class})
+  @TransactionalStoreBlob
   protected Content doPut(final MavenPath path,
                           final Path sourceFile,
                           final String contentType,
-                          final AttributesMap contentAttributes)
+                          final AttributesMap contentAttributes,
+                          final Map<HashAlgorithm, HashCode> hashes,
+                          final long size)
       throws IOException
   {
     final StorageTx tx = UnitOfWork.currentTx();
@@ -254,11 +263,35 @@ public class MavenFacetImpl
     final AssetBlob assetBlob = tx.createBlob(
         path.getPath(),
         sourceFile,
-        HashType.ALGORITHMS,
+        hashes,
         null,
-        contentType
+        contentType,
+        size
     );
 
+    return doPutAssetBlob(path, contentAttributes, tx, assetBlob);
+  }
+
+  @TransactionalStoreBlob
+  protected Content doPut(final MavenPath path,
+                          final TempBlob blob,
+                          final String contentType,
+                          final AttributesMap contentAttributes)
+      throws IOException
+  {
+    StorageTx tx = UnitOfWork.currentTx();
+
+    AssetBlob assetBlob = tx.createBlob(path.getPath(), blob, null, contentType, true);
+
+    return doPutAssetBlob(path, contentAttributes, tx, assetBlob);
+  }
+
+  private Content doPutAssetBlob(final MavenPath path,
+                                 final AttributesMap contentAttributes,
+                                 final StorageTx tx,
+                                 final AssetBlob assetBlob)
+      throws IOException
+  {
     if (path.getCoordinates() != null) {
       return toContent(putArtifact(tx, path, assetBlob, contentAttributes), assetBlob.getBlob());
     }
@@ -276,6 +309,7 @@ public class MavenFacetImpl
     final Coordinates coordinates = checkNotNull(path.getCoordinates());
     final Bucket bucket = tx.findBucket(getRepository());
     Component component = findComponent(tx, getRepository(), path);
+    boolean updatePomModel = false;
     if (component == null) {
       // Create and set top-level properties
       component = tx.createComponent(bucket, getRepository().getFormat())
@@ -295,8 +329,9 @@ public class MavenFacetImpl
       tx.saveComponent(component);
     }
     else if (path.isPom()) {
-      fillInFromModel(path, assetBlob, component.formatAttributes());
-      tx.saveComponent(component);
+      // reduce copying by deferring update of pom.xml attributes (which involves reading the blob)
+      // until after putAssetPayload, in case the blob is a duplicate and the model has not changed
+      updatePomModel = true;
     }
 
     Asset asset = findAsset(tx, bucket, path);
@@ -319,8 +354,14 @@ public class MavenFacetImpl
     }
 
     putAssetPayload(tx, asset, assetBlob, contentAttributes);
-    asset.markAsAccessed();
+    asset.markAsDownloaded();
     tx.saveAsset(asset);
+
+    // avoid re-reading pom.xml if it's a duplicate of the old asset
+    if (updatePomModel && !assetBlob.isDuplicate()) {
+      fillInFromModel(path, assetBlob, component.formatAttributes());
+      tx.saveComponent(component);
+    }
 
     return asset;
   }
@@ -334,13 +375,27 @@ public class MavenFacetImpl
   {
     Model model = MavenModels.readModel(assetBlob.getBlob().getInputStream());
     if (model == null) {
-      log.debug("Could not parse POM: {} @ {}", getRepository().getName(), mavenPath.getPath());
+      log.warn("Could not parse POM: {} @ {}", getRepository().getName(), mavenPath.getPath());
       return;
     }
     String packaging = model.getPackaging();
     componentAttributes.set(P_PACKAGING, packaging == null ? "jar" : packaging);
     componentAttributes.set(P_POM_NAME, model.getName());
     componentAttributes.set(P_POM_DESCRIPTION, model.getDescription());
+  }
+
+  @TransactionalStoreMetadata
+  public Asset put(final MavenPath path, final AssetBlob assetBlob, final AttributesMap contentAttributes)
+      throws IOException
+  {
+    final StorageTx tx = UnitOfWork.currentTx();
+
+    if (path.getCoordinates() != null) {
+      return putArtifact(tx, path, assetBlob, contentAttributes);
+    }
+    else {
+      return putFile(tx, path, assetBlob, contentAttributes);
+    }
   }
 
   private Asset putFile(final StorageTx tx,
@@ -362,7 +417,7 @@ public class MavenFacetImpl
     }
 
     putAssetPayload(tx, asset, assetBlob, contentAttributes);
-    asset.markAsAccessed();
+    asset.markAsDownloaded();
     tx.saveAsset(asset);
 
     return asset;
@@ -379,7 +434,7 @@ public class MavenFacetImpl
   }
 
   @Override
-  @Transactional
+  @TransactionalDeleteBlob
   public boolean delete(final MavenPath... paths) throws IOException {
     final StorageTx tx = UnitOfWork.currentTx();
 

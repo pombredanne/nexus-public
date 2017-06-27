@@ -20,9 +20,7 @@ import java.util.Map;
 
 import org.sonatype.nexus.common.entity.Entity;
 import org.sonatype.nexus.common.entity.EntityMetadata;
-import org.sonatype.nexus.common.node.LocalNodeAccess;
-
-import com.google.common.base.Throwables;
+import org.sonatype.nexus.common.node.NodeAccess;
 
 /**
  * Audit data.
@@ -66,7 +64,7 @@ public class AuditData
   /**
    * The node-id where the change occurred.
    *
-   * @see LocalNodeAccess#getId()
+   * @see NodeAccess#getId()
    */
   private String nodeId;
 
@@ -144,7 +142,7 @@ public class AuditData
       return copy;
     }
     catch (CloneNotSupportedException e) {
-      throw Throwables.propagate(e);
+      throw new RuntimeException(e);
     }
   }
 

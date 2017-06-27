@@ -24,6 +24,45 @@
 }
 
 /**
+ * Style for the global "license warning" header
+ */
+@include extjs-panel-ui(
+        $ui: 'nx-license-warning',
+        $ui-header-background-color: $color-charcoal
+);
+
+.x-panel-nx-license-warning .x-panel-header {
+  padding: 5px 16px;
+}
+.x-panel-nx-license-warning {
+  color: $color-white;
+}
+
+.x-panel-nx-license-warning a,
+.x-panel-nx-license-warning a:visited,
+.x-panel-nx-license-warning a:active {
+  color: $color-gainsboro;
+}
+
+.x-panel-nx-license-warning a:hover {
+  color: $color-white;
+  text-decoration: underline;
+}
+
+/**
+ * Style for the global "node frozen warning" header
+ */
+.x-panel-nx-database-freeze-warning {
+  @extend .x-panel-nx-license-warning;
+  background-color: $color-alert-purple;
+}
+
+.x-panel-header-text-container-nx-database-freeze-warning {
+  margin-left: 6px;
+  font-weight: bold;
+}
+
+/**
 * Style for the "transparent" inter-page panels
 *
 * ui: 'subsection'
@@ -69,4 +108,20 @@
  */
 .nx-hr {
   border-top: 1px solid $color-gainsboro !important;
+}
+
+/**
+ * Style for the 'too many results' panel on the search page
+ */
+@include extjs-panel-ui(
+  $ui: 'nx-info-message',
+
+  $ui-header-background-color: $color-white,
+  $ui-header-color: $color-night-rider
+);
+.x-panel-nx-info-message .x-header {
+  padding: 0 10px 10px 10px;
+}
+.nx-search-result-list {
+  border-top: 1px solid $color-gainsboro;
 }

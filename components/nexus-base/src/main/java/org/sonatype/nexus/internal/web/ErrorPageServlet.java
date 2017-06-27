@@ -18,6 +18,7 @@ import java.io.PrintWriter;
 import java.net.URL;
 
 import javax.inject.Inject;
+import javax.inject.Named;
 import javax.inject.Singleton;
 import javax.servlet.ServletException;
 import javax.servlet.http.HttpServlet;
@@ -35,6 +36,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.common.base.Throwables.getRootCause;
 import static javax.servlet.http.HttpServletResponse.SC_NOT_FOUND;
 
 /**
@@ -44,6 +46,7 @@ import static javax.servlet.http.HttpServletResponse.SC_NOT_FOUND;
  *
  * @see ErrorPageFilter
  */
+@Named
 @Singleton
 public class ErrorPageServlet
     extends HttpServlet
@@ -114,18 +117,24 @@ public class ErrorPageServlet
       errorMessage = "Not found";
     }
 
-    // error message must always be non-null when rendering
+    // maintain custom status message when (re)setting the status code,
+    // we can't use sendError because it doesn't allow custom html body
     if (errorMessage == null) {
-      errorMessage = "Unknown error";
+      response.setStatus(errorCode);
+    }
+    else {
+      response.setStatus(errorCode, errorMessage);
     }
 
+    response.setContentType("text/html");
+
     // ensure sanity of passed in strings which are used to render html content
-    errorMessage = StringEscapeUtils.escapeHtml(errorMessage);
+    String errorDescription = errorMessage != null ? StringEscapeUtils.escapeHtml(errorMessage) : "Unknown error";
 
     TemplateParameters params = templateHelper.parameters();
     params.set("errorCode", errorCode);
     params.set("errorName", Status.fromStatusCode(errorCode).getReasonPhrase());
-    params.set("errorDescription", errorMessage);
+    params.set("errorDescription", errorDescription);
 
     // add cause if ?debug enabled and there is an exception
     if (cause != null && ServletHelper.isDebug(request)) {
@@ -133,8 +142,6 @@ public class ErrorPageServlet
     }
 
     String html = templateHelper.render(template, params);
-    response.setStatus(errorCode);
-    response.setContentType("text/html");
     try (PrintWriter out = new PrintWriter(new OutputStreamWriter(response.getOutputStream()))) {
       out.println(html);
     }
@@ -146,8 +153,19 @@ public class ErrorPageServlet
    * @since 3.0
    */
   static void attachCause(final HttpServletRequest request, final Throwable cause) {
-    log.debug("Attaching cause", cause);
+    if (isJavaLangError(cause)) {
+      // Log java.lang.Error exceptions at error level
+      log.error("Unexpected exception", getRootCause(cause));
+    }
+    else {
+      log.debug("Attaching cause", cause);
+    }
     request.setAttribute(ERROR_EXCEPTION_TYPE, cause.getClass());
     request.setAttribute(ERROR_EXCEPTION, cause);
   }
+
+  private static boolean isJavaLangError(final Throwable e) {
+    return getRootCause(e) instanceof Error;
+  }
+
 }

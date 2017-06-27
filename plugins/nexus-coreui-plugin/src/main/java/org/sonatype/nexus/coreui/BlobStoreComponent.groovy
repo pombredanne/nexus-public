@@ -30,9 +30,11 @@ import org.sonatype.nexus.repository.manager.RepositoryManager
 import org.sonatype.nexus.validation.Validate
 import org.sonatype.nexus.validation.group.Create
 
+import com.codahale.metrics.annotation.ExceptionMetered
+import com.codahale.metrics.annotation.Timed
 import com.softwarementors.extjs.djn.config.annotations.DirectAction
 import com.softwarementors.extjs.djn.config.annotations.DirectMethod
-import org.apache.shiro.authz.annotation.RequiresAuthentication
+import org.apache.shiro.authz.annotation.RequiresPermissions
 import org.hibernate.validator.constraints.NotEmpty
 
 /**
@@ -50,9 +52,6 @@ class BlobStoreComponent
   BlobStoreManager blobStoreManager
 
   @Inject
-  AttributeConverter attributeConverter
-
-  @Inject
   Map<String, Provider<BlobStore>> blobstorePrototypes
 
   @Inject
@@ -62,11 +61,17 @@ class BlobStoreComponent
   RepositoryManager repositoryManager
 
   @DirectMethod
+  @Timed
+  @ExceptionMetered
+  @RequiresPermissions('nexus:blobstores:read')
   List<BlobStoreXO> read() {
     blobStoreManager.browse().collect { asBlobStore(it) }
   }
 
   @DirectMethod
+  @Timed
+  @ExceptionMetered
+  @RequiresPermissions('nexus:blobstores:read')
   List<ReferenceXO> readTypes() {
     blobstorePrototypes.collect { key, provider ->
       new ReferenceXO(id: key, name: key)
@@ -74,20 +79,24 @@ class BlobStoreComponent
   }
 
   @DirectMethod
-  @RequiresAuthentication
+  @Timed
+  @ExceptionMetered
+  @RequiresPermissions('nexus:blobstores:create')
   @Validate(groups = [Create.class, Default.class])
   BlobStoreXO create(final @NotNull @Valid BlobStoreXO blobStore) {
     return asBlobStore(blobStoreManager.create(
         new BlobStoreConfiguration(
             name: blobStore.name,
             type: blobStore.type,
-            attributes: attributeConverter.asAttributes(blobStore.attributes)
+            attributes: blobStore.attributes
         )
     ))
   }
 
   @DirectMethod
-  @RequiresAuthentication
+  @Timed
+  @ExceptionMetered
+  @RequiresPermissions('nexus:blobstores:delete')
   @Validate
   void remove(final @NotEmpty String name) {
     if (repositoryManager.isBlobstoreUsed(name)) {
@@ -97,6 +106,9 @@ class BlobStoreComponent
   }
 
   @DirectMethod
+  @Timed
+  @ExceptionMetered
+  @RequiresPermissions('nexus:blobstores:read')
   PathSeparatorXO defaultWorkDirectory() {
     return new PathSeparatorXO(
         path: applicationDirectories.getWorkDirectory('blobs'),
@@ -108,11 +120,11 @@ class BlobStoreComponent
     return new BlobStoreXO(
         name: blobStore.blobStoreConfiguration.name,
         type: blobStore.blobStoreConfiguration.type,
-        attributes: attributeConverter.asAttributes(blobStore.blobStoreConfiguration.attributes),
+        attributes: blobStore.blobStoreConfiguration.attributes,
         blobCount: blobStore.metrics.blobCount,
         totalSize: blobStore.metrics.totalSize,
         availableSpace: blobStore.metrics.availableSpace,
-        inUse: repositoryManager.isBlobstoreUsed(blobStore.blobStoreConfiguration.name)
+        repositoryUseCount: repositoryManager.blobstoreUsageCount(blobStore.blobStoreConfiguration.name)
     )
   }
 }

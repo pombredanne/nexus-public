@@ -25,11 +25,10 @@ import javax.inject.Singleton;
 
 import org.sonatype.goodies.common.Mutex;
 import org.sonatype.nexus.common.app.ManagedLifecycle;
-import org.sonatype.nexus.common.event.EventBus;
+import org.sonatype.nexus.common.event.EventAware;
+import org.sonatype.nexus.common.event.EventManager;
 import org.sonatype.nexus.common.stateguard.Guarded;
 import org.sonatype.nexus.common.stateguard.StateGuardLifecycleSupport;
-import org.sonatype.nexus.httpclient.GlobalHttpClientConfigurationChanged;
-import org.sonatype.nexus.httpclient.HttpClientConfigurationStore;
 import org.sonatype.nexus.httpclient.HttpClientManager;
 import org.sonatype.nexus.httpclient.HttpClientPlan;
 import org.sonatype.nexus.httpclient.HttpClientPlan.Customizer;
@@ -37,14 +36,15 @@ import org.sonatype.nexus.httpclient.config.ConfigurationCustomizer;
 import org.sonatype.nexus.httpclient.config.HttpClientConfiguration;
 import org.sonatype.nexus.httpclient.config.HttpClientConfigurationChangedEvent;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Stopwatch;
+import com.google.common.eventbus.Subscribe;
 import org.apache.http.HttpHost;
 import org.apache.http.HttpRequest;
 import org.apache.http.HttpResponse;
 import org.apache.http.client.methods.HttpUriRequest;
 import org.apache.http.client.protocol.HttpClientContext;
 import org.apache.http.client.utils.URIUtils;
-import org.apache.http.conn.routing.RouteInfo;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClientBuilder;
 import org.apache.http.protocol.HttpContext;
@@ -66,7 +66,7 @@ import static org.sonatype.nexus.common.stateguard.StateGuardLifecycleSupport.St
 @Singleton
 public class HttpClientManagerImpl
     extends StateGuardLifecycleSupport
-    implements HttpClientManager
+    implements HttpClientManager, EventAware
 {
   static final String HTTPCLIENT_OUTBOUND_LOGGER_NAME = "org.sonatype.nexus.httpclient.outbound";
 
@@ -76,7 +76,7 @@ public class HttpClientManagerImpl
 
   private final Logger outboundLog = LoggerFactory.getLogger(HTTPCLIENT_OUTBOUND_LOGGER_NAME);
 
-  private final EventBus eventBus;
+  private final EventManager eventManager;
 
   private final HttpClientConfigurationStore store;
 
@@ -91,13 +91,13 @@ public class HttpClientManagerImpl
   private HttpClientConfiguration configuration;
 
   @Inject
-  public HttpClientManagerImpl(final EventBus eventBus,
+  public HttpClientManagerImpl(final EventManager eventManager,
       final HttpClientConfigurationStore store,
       @Named("initial") final Provider<HttpClientConfiguration> defaults,
       final SharedHttpClientConnectionManager sharedConnectionManager,
       final DefaultsCustomizer defaultsCustomizer)
   {
-    this.eventBus = checkNotNull(eventBus);
+    this.eventManager = checkNotNull(eventManager);
 
     this.store = checkNotNull(store);
     log.debug("Store: {}", store);
@@ -184,10 +184,19 @@ public class HttpClientManagerImpl
       this.configuration = model;
     }
 
-    eventBus.post(new HttpClientConfigurationChangedEvent(model));
+    eventManager.post(new HttpClientConfigurationChangedEvent(model));
+  }
 
-    // FIXME: drop this event in favor of ^^^ which cares updated data
-    eventBus.post(new GlobalHttpClientConfigurationChanged());
+  @Subscribe
+  public void onStoreChanged(final HttpClientConfigurationEvent event) {
+    if (!event.isLocal()) {
+      log.debug("Reloading configuration after change by node {}", event.getRemoteNodeId());
+      HttpClientConfiguration model;
+      synchronized (lock) {
+        configuration = model = loadConfiguration();
+      }
+      eventManager.post(new HttpClientConfigurationChangedEvent(model));
+    }
   }
 
   //
@@ -210,7 +219,7 @@ public class HttpClientManagerImpl
   @Override
   @Guarded(by = STARTED)
   public HttpClientBuilder prepare(@Nullable final Customizer customizer) {
-    final HttpClientPlan plan = new HttpClientPlan();
+    final HttpClientPlan plan = httpClientPlan();
 
     // attach connection manager early, so customizer has chance to replace it if needed
     plan.getClient().setConnectionManager(sharedConnectionManager);
@@ -228,6 +237,11 @@ public class HttpClientManagerImpl
 
     // apply plan to builder
     HttpClientBuilder builder = plan.getClient();
+    // User agent must be set here to apply to all apache http requests, including over proxies
+    String userAgent = plan.getUserAgent();
+    if (userAgent != null) {
+      setUserAgent(builder, userAgent);
+    }
     builder.setDefaultConnectionConfig(plan.getConnection().build());
     builder.setDefaultSocketConfig(plan.getSocket().build());
     builder.setDefaultRequestConfig(plan.getRequest().build());
@@ -274,12 +288,27 @@ public class HttpClientManagerImpl
   }
 
   /**
-   * Creates absolute request URI with full path from passed in context, honoring proxy if in play.
+   * Allows for verification on unverifiable final method. NOTE: if you modify the behavior of this
+   * method beyond simply delegating to {@link HttpClientBuilder#setUserAgent}, write a unit test for it.
+   */
+  @VisibleForTesting
+  void setUserAgent(HttpClientBuilder builder, String value) {
+    builder.setUserAgent(value);
+  }
+
+  @VisibleForTesting
+  HttpClientPlan httpClientPlan() {
+    return new HttpClientPlan();
+  }
+
+  /**
+   * Creates absolute request URI with full path from passed in context.
    */
   @Nonnull
   private URI getRequestURI(final HttpContext context) {
     final HttpClientContext clientContext = HttpClientContext.adapt(context);
     final HttpRequest httpRequest = clientContext.getRequest();
+    final HttpHost target = clientContext.getTargetHost();
     try {
       URI uri;
       if (httpRequest instanceof HttpUriRequest) {
@@ -288,21 +317,11 @@ public class HttpClientManagerImpl
       else {
         uri = URI.create(httpRequest.getRequestLine().getUri());
       }
-      final RouteInfo routeInfo = clientContext.getHttpRoute();
-      if (routeInfo != null) {
-        if (routeInfo.getHopCount() == 1 && uri.isAbsolute()) {
-          return uri;
-        }
-        HttpHost target = routeInfo.getHopTarget(0);
-        return URIUtils.resolve(URI.create(target.toURI()), uri);
-      }
-      else {
-        return uri;
-      }
+      return uri.isAbsolute() ? uri : URIUtils.resolve(URI.create(target.toURI()), uri);
     }
     catch (Exception e) {
       log.warn("Could not create absolute request URI", e);
-      return URI.create(clientContext.getTargetHost().toURI());
+      return URI.create(target.toURI());
     }
   }
 }

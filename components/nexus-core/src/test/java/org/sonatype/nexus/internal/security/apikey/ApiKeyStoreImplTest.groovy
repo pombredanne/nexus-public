@@ -15,11 +15,10 @@ package org.sonatype.nexus.internal.security.apikey
 import org.sonatype.goodies.testsupport.TestSupport
 import org.sonatype.nexus.crypto.internal.CryptoHelperImpl
 import org.sonatype.nexus.crypto.internal.RandomBytesGeneratorImpl
-import org.sonatype.nexus.orient.DatabaseInstanceRule
+import org.sonatype.nexus.orient.testsupport.DatabaseInstanceRule
 import org.sonatype.nexus.security.UserPrincipalsHelper
 
 import com.google.common.collect.Maps
-import com.google.inject.util.Providers
 import org.apache.shiro.subject.PrincipalCollection
 import org.apache.shiro.subject.SimplePrincipalCollection
 import org.hamcrest.MatcherAssert
@@ -40,14 +39,14 @@ class ApiKeyStoreImplTest
     extends TestSupport
 {
   @Rule
-  public DatabaseInstanceRule database = new DatabaseInstanceRule('test')
+  public DatabaseInstanceRule database = DatabaseInstanceRule.inMemory('test')
 
   private ApiKeyStoreImpl underTest
 
   @Before
   void setup() {
     underTest = new ApiKeyStoreImpl(
-        Providers.of(database.instance),
+        database.instanceProvider,
         new ApiKeyEntityAdapter(),
         mock(UserPrincipalsHelper.class),
         Maps.newHashMap(),
@@ -68,6 +67,16 @@ class ApiKeyStoreImplTest
   void 'Can create and read an API key'() {
     PrincipalCollection p = makePrincipals("name")
     char[] key = underTest.createApiKey('foo', p)
+    char[] fetchedKey = underTest.getApiKey('foo', p)
+
+    assertThat(fetchedKey, equalTo(key))
+  }
+
+  @Test
+  void 'Can persist and read an API key with provided value'() {
+    PrincipalCollection p = makePrincipals("name")
+    char[] key = ['a', 'b', 'c', 'd'] as char[]
+    underTest.persistApiKey('foo', p, key)
     char[] fetchedKey = underTest.getApiKey('foo', p)
 
     assertThat(fetchedKey, equalTo(key))
@@ -112,6 +121,19 @@ class ApiKeyStoreImplTest
     PrincipalCollection principals = underTest.getPrincipals('foo', key)
 
     assertThat(principals.primaryPrincipal, equalTo("alpha"))
+  }
+
+  @Test
+  void 'Can delete all API Keys'() {
+    PrincipalCollection principalA = makePrincipals("name-a")
+    PrincipalCollection principalB = makePrincipals("name-b")
+
+    underTest.createApiKey('foo', principalA)
+    underTest.createApiKey('bar', principalB)
+    underTest.deleteApiKeys()
+
+    assertThat(underTest.getApiKey('foo', principalA), equalTo(null))
+    assertThat(underTest.getApiKey('bar', principalB), equalTo(null))
   }
 
   private PrincipalCollection makePrincipals(String name) {

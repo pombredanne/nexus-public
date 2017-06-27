@@ -14,6 +14,7 @@ package org.sonatype.nexus.repository.search;
 
 import java.io.IOException;
 import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
@@ -21,8 +22,11 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map.Entry;
 import java.util.NoSuchElementException;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Predicate;
+import java.util.stream.StreamSupport;
 
 import javax.annotation.Nullable;
 import javax.inject.Inject;
@@ -33,26 +37,31 @@ import javax.inject.Singleton;
 import org.sonatype.goodies.common.ComponentSupport;
 import org.sonatype.nexus.repository.Repository;
 import org.sonatype.nexus.repository.manager.RepositoryManager;
+import org.sonatype.nexus.repository.search.SearchSubjectHelper.SubjectRegistration;
 import org.sonatype.nexus.repository.security.RepositoryViewPermission;
-import org.sonatype.nexus.security.BreadActions;
+import org.sonatype.nexus.repository.selector.internal.ContentAuthPluginScriptFactory;
+import org.sonatype.nexus.repository.storage.Component;
 import org.sonatype.nexus.security.SecurityHelper;
 
-import com.google.common.base.Charsets;
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Function;
-import com.google.common.base.Throwables;
 import com.google.common.collect.Collections2;
+import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 import com.google.common.io.Resources;
+import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.admin.indices.validate.query.QueryExplanation;
 import org.elasticsearch.action.admin.indices.validate.query.ValidateQueryResponse;
-import org.elasticsearch.action.count.CountRequestBuilder;
-import org.elasticsearch.action.count.CountResponse;
+import org.elasticsearch.action.bulk.BulkProcessor;
+import org.elasticsearch.action.delete.DeleteResponse;
+import org.elasticsearch.action.index.IndexResponse;
 import org.elasticsearch.action.search.SearchRequestBuilder;
 import org.elasticsearch.action.search.SearchResponse;
 import org.elasticsearch.action.search.ShardSearchFailure;
 import org.elasticsearch.client.Client;
 import org.elasticsearch.client.IndicesAdminClient;
+import org.elasticsearch.common.unit.ByteSizeValue;
 import org.elasticsearch.common.unit.TimeValue;
 import org.elasticsearch.common.xcontent.ToXContent;
 import org.elasticsearch.common.xcontent.XContentBuilder;
@@ -60,13 +69,17 @@ import org.elasticsearch.common.xcontent.XContentFactory;
 import org.elasticsearch.common.xcontent.XContentType;
 import org.elasticsearch.index.IndexNotFoundException;
 import org.elasticsearch.index.query.QueryBuilder;
+import org.elasticsearch.index.query.QueryBuilders;
+import org.elasticsearch.indices.IndexAlreadyExistsException;
 import org.elasticsearch.search.SearchHit;
 import org.elasticsearch.search.internal.InternalSearchResponse;
 import org.elasticsearch.search.profile.ProfileShardResult;
 import org.elasticsearch.search.sort.SortBuilder;
 
 import static com.google.common.base.Preconditions.checkNotNull;
+import static org.elasticsearch.index.query.QueryBuilders.idsQuery;
 import static org.sonatype.nexus.common.hash.HashAlgorithm.SHA1;
+import static org.sonatype.nexus.security.BreadActions.BROWSE;
 
 /**
  * Default {@link SearchService} implementation. It does not expects that {@link Repository} have storage facet
@@ -96,25 +109,62 @@ public class SearchServiceImpl
 
   private final SecurityHelper securityHelper;
 
+  private final SearchSubjectHelper searchSubjectHelper;
+
   private final List<IndexSettingsContributor> indexSettingsContributors;
 
   private final ConcurrentMap<String, String> repositoryNameMapping;
-  
+
   private final boolean profile;
 
+  private final boolean periodicFlush;
+
+  private BulkProcessor bulkProcessor;
+
+  /**
+   * @param client source for a {@link Client}
+   * @param repositoryManager the repositoryManager
+   * @param securityHelper the securityHelper
+   * @param searchSubjectHelper the searchSubjectHelper
+   * @param indexSettingsContributors the indexSetttingsContributors
+   * @param profile whether or not to profile elasticsearch queries (default: false)
+   * @param bulkCapacity how many bulk requests to batch before they're automatically flushed (default: 1000)
+   * @param concurrentRequests how many bulk requests to execute concurrently (default: 1; 0 means execute synchronously)
+   * @param flushInterval how long to wait in milliseconds between flushing bulk requests (default: 0, instantaneous)
+   */
   @Inject
-  public SearchServiceImpl(final Provider<Client> client,
+  public SearchServiceImpl(final Provider<Client> client, //NOSONAR
                            final RepositoryManager repositoryManager,
                            final SecurityHelper securityHelper,
+                           final SearchSubjectHelper searchSubjectHelper,
                            final List<IndexSettingsContributor> indexSettingsContributors,
-                           @Named("${nexus.elasticsearch.profile:-false}") final boolean profile)
+                           @Named("${nexus.elasticsearch.profile:-false}") final boolean profile,
+                           @Named("${nexus.elasticsearch.bulkCapacity:-1000}") final int bulkCapacity,
+                           @Named("${nexus.elasticsearch.concurrentRequests:-1}") final int concurrentRequests,
+                           @Named("${nexus.elasticsearch.flushInterval:-0}") final int flushInterval)
   {
     this.client = checkNotNull(client);
     this.repositoryManager = checkNotNull(repositoryManager);
     this.securityHelper = checkNotNull(securityHelper);
+    this.searchSubjectHelper = checkNotNull(searchSubjectHelper);
     this.indexSettingsContributors = checkNotNull(indexSettingsContributors);
     this.repositoryNameMapping = Maps.newConcurrentMap();
-    this.profile = checkNotNull(profile);
+    this.profile = profile;
+    this.periodicFlush = flushInterval > 0;
+
+    this.bulkProcessor = BulkProcessor
+        .builder(client.get(), new BulkIndexUpdateListener())
+        .setBulkActions(bulkCapacity)
+        .setBulkSize(new ByteSizeValue(-1)) // turn off automatic flush based on size in bytes
+        .setConcurrentRequests(concurrentRequests)
+        .setFlushInterval(periodicFlush ? TimeValue.timeValueMillis(flushInterval) : null)
+        .build();
+  }
+
+  @Override
+  public void flush() {
+    log.debug("Flushing index requests");
+    bulkProcessor.flush();
   }
 
   @Override
@@ -145,7 +195,7 @@ public class SearchServiceImpl
         String source = "{}";
         for (URL url : urls) {
           log.debug("Merging ElasticSearch mapping: {}", url);
-          String contributed = Resources.toString(url, Charsets.UTF_8);
+          String contributed = Resources.toString(url, StandardCharsets.UTF_8);
           log.trace("Contributed ElasticSearch mapping: {}", contributed);
           source = JsonUtils.merge(source, contributed);
         }
@@ -156,8 +206,11 @@ public class SearchServiceImpl
             .execute()
             .actionGet();
       }
+      catch (IndexAlreadyExistsException e) {
+        log.debug("Using existing index for {}", repository, e);
+      }
       catch (IOException e) {
-        throw Throwables.propagate(e);
+        throw new RuntimeException(e);
       }
     }
     repositoryNameMapping.put(repository.getName(), indexName);
@@ -174,6 +227,7 @@ public class SearchServiceImpl
   }
 
   private void deleteIndex(final String indexName) {
+    bulkProcessor.flush(); // make sure dangling requests don't resurrect this index
     IndicesAdminClient indices = indicesAdminClient();
     if (indices.prepareExists(indexName).execute().actionGet().isExists()) {
       indices.prepareDelete(indexName).execute().actionGet();
@@ -200,7 +254,45 @@ public class SearchServiceImpl
       return;
     }
     log.debug("Adding to index document {} from {}: {}", identifier, repository, json);
-    client.get().prepareIndex(indexName, TYPE, identifier).setSource(json).execute();
+    client.get().prepareIndex(indexName, TYPE, identifier).setSource(json).execute(
+        new ActionListener<IndexResponse>() {
+          @Override
+          public void onResponse(final IndexResponse indexResponse) {
+            log.debug("successfully added {} {} to index {}", TYPE, identifier, indexName, indexResponse);
+          }
+          @Override
+          public void onFailure(final Throwable e) {
+            log.error(
+              "failed to add {} {} to index {}; this is a sign that the Elasticsearch index thread pool is overloaded",
+              TYPE, identifier, indexName, e);
+          }
+        });
+  }
+
+  @Override
+  public void bulkPut(final Repository repository, final Iterable<Component> components,
+                      final Function<Component, String> identifierProducer,
+                      final Function<Component, String> jsonDocumentProducer) {
+    checkNotNull(repository);
+    checkNotNull(components);
+    String indexName = repositoryNameMapping.get(repository.getName());
+    if (indexName == null) {
+      return;
+    }
+
+    components.forEach(component -> {
+      String identifier = identifierProducer.apply(component);
+      String json = jsonDocumentProducer.apply(component);
+      bulkProcessor.add(
+          client.get()
+              .prepareIndex(indexName, TYPE, identifier)
+              .setSource(json).request()
+      );
+    });
+
+    if (!periodicFlush) {
+      bulkProcessor.flush();
+    }
   }
 
   @Override
@@ -212,11 +304,66 @@ public class SearchServiceImpl
       return;
     }
     log.debug("Removing from index document {} from {}", identifier, repository);
-    client.get().prepareDelete(indexName, TYPE, identifier).execute();
+    client.get().prepareDelete(indexName, TYPE, identifier).execute(new ActionListener<DeleteResponse>() {
+      @Override
+      public void onResponse(final DeleteResponse deleteResponse) {
+        log.debug("successfully removed {} {} from index {}", TYPE, identifier, indexName, deleteResponse);
+      }
+      @Override
+      public void onFailure(final Throwable e) {
+        log.error(
+          "failed to remove {} {} from index {}; this is a sign that the Elasticsearch index thread pool is overloaded",
+          TYPE, identifier, indexName, e);
+      }
+    });
   }
 
   @Override
-  public Iterable<SearchHit> browse(final QueryBuilder query) {
+  public void bulkDelete(@Nullable final Repository repository, final Iterable<String> identifiers) {
+    checkNotNull(identifiers);
+
+    if (repository != null) {
+      String indexName = repositoryNameMapping.get(repository.getName());
+      if (indexName == null) {
+        return; // index has gone, nothing to delete
+      }
+
+      identifiers.forEach(id ->
+          bulkProcessor.add(client.get().prepareDelete(indexName, TYPE, id).request()));
+    }
+    else {
+
+      // When bulk-deleting documents based on the write-ahead-log we won't have the owning index.
+      // Since delete is a single-index operation we need to discover the index for each identifier
+      // before we can delete its document. Chunking is used to keep queries to a reasonable size.
+
+      Iterables.partition(identifiers, 100).forEach(chunk -> {
+        SearchResponse toDelete = client.get()
+            .prepareSearch("_all")
+            .setFetchSource(false)
+            .setQuery(idsQuery(TYPE).ids(chunk))
+            .setSize(chunk.size())
+            .execute()
+            .actionGet();
+
+        toDelete.getHits().forEach(hit ->
+            bulkProcessor.add(client.get().prepareDelete(hit.index(), TYPE, hit.getId()).request()));
+      });
+    }
+
+    if (!periodicFlush) {
+      bulkProcessor.flush();
+    }
+  }
+
+  @Override
+  public Iterable<SearchHit> browseUnrestricted(final QueryBuilder query) {
+    return browseUnrestrictedInRepos(query, null);
+  }
+
+  @Override
+  public Iterable<SearchHit> browseUnrestrictedInRepos(final QueryBuilder query,
+                                                       @Nullable final Collection<String> repoNames) {
     checkNotNull(query);
     try {
       if (!indicesAdminClient().prepareValidateQuery().setQuery(query).execute().actionGet().isValid()) {
@@ -227,7 +374,7 @@ public class SearchServiceImpl
       // no repositories were created yet, so there is no point in searching
       return null;
     }
-    final String[] searchableIndexes = getSearchableIndexes();
+    final String[] searchableIndexes = getSearchableIndexes(false, repoNames);
     if (searchableIndexes.length == 0) {
       return Collections.emptyList();
     }
@@ -288,9 +435,26 @@ public class SearchServiceImpl
   }
 
   @Override
-  public Iterable<SearchHit> browse(final QueryBuilder query, final int from, final int size) {
-    SearchResponse response = search(query, null, from, size);
+  public Iterable<SearchHit> browseUnrestricted(final QueryBuilder query, final int from, final int size) {
+    SearchResponse response = searchUnrestricted(query, null, from, size);
     return response.getHits();
+  }
+
+  @Override
+  public SearchResponse searchUnrestricted(final QueryBuilder query,
+                                           @Nullable final List<SortBuilder> sort,
+                                           final int from,
+                                           final int size)
+  {
+    if (!validateQuery(query)) {
+      return EMPTY_SEARCH_RESPONSE;
+    }
+    final String[] searchableIndexes = getSearchableIndexes(false);
+    if (searchableIndexes.length == 0) {
+      return EMPTY_SEARCH_RESPONSE;
+    }
+
+    return executeSearch(query, searchableIndexes, from, size, sort, null);
   }
 
   @Override
@@ -299,46 +463,64 @@ public class SearchServiceImpl
                                final int from,
                                final int size)
   {
-    if(!validateQuery(query)) {
+    if (!validateQuery(query)) {
       return EMPTY_SEARCH_RESPONSE;
     }
-    final String[] searchableIndexes = getSearchableIndexes();
+    final String[] searchableIndexes = getSearchableIndexes(true);
     if (searchableIndexes.length == 0) {
       return EMPTY_SEARCH_RESPONSE;
     }
 
+    try (SubjectRegistration registration = searchSubjectHelper.register(securityHelper.subject())) {
+      return executeSearch(query, searchableIndexes, from, size, sort,
+          QueryBuilders.scriptQuery(ContentAuthPluginScriptFactory.newScript(registration.getId())));
+    }
+  }
+
+  private SearchResponse executeSearch(final QueryBuilder query,
+                                       final String[] searchableIndexes,
+                                       final int from,
+                                       final int size,
+                                       @Nullable final List<SortBuilder> sort,
+                                       @Nullable final QueryBuilder postFilter)
+  {
+    checkNotNull(query);
+    checkNotNull(searchableIndexes);
     SearchRequestBuilder searchRequestBuilder = client.get().prepareSearch(searchableIndexes)
         .setTypes(TYPE)
         .setQuery(query)
         .setFrom(from)
         .setSize(size)
         .setProfile(profile);
+    if (postFilter != null) {
+      searchRequestBuilder.setPostFilter(postFilter);
+    }
     if (sort != null) {
       for (SortBuilder entry : sort) {
         searchRequestBuilder.addSort(entry);
       }
     }
     SearchResponse searchResponse = searchRequestBuilder.execute().actionGet();
-    
-    if(profile) {
+
+    if (profile) {
       logProfileResults(searchResponse);
     }
-    
+
     return searchResponse;
   }
 
   @Override
-  public long count(final QueryBuilder query) {
+  public long countUnrestricted(final QueryBuilder query) {
     if(!validateQuery(query)) {
       return 0;
     }
-    final String[] searchableIndexes = getSearchableIndexes();
+    final String[] searchableIndexes = getSearchableIndexes(false);
     if (searchableIndexes.length == 0) {
       return 0;
     }
-    CountRequestBuilder count = client.get().prepareCount(searchableIndexes).setQuery(query);
-    CountResponse response = count.execute().actionGet();
-    return response.getCount();
+    SearchRequestBuilder count = client.get().prepareSearch(searchableIndexes).setQuery(query).setSize(0);
+    SearchResponse response = count.execute().actionGet();
+    return response.getHits().totalHits();
   }
 
   private boolean validateQuery(QueryBuilder query) {
@@ -369,20 +551,29 @@ public class SearchServiceImpl
     return true;
   }
 
-  private String[] getSearchableIndexes() {
-    List<String> indexes = Lists.newArrayList();
-    for (Repository repository : repositoryManager.browse()) {
-      // check if search facet is available so avoid searching repositories without an index
-      repository.optionalFacet(SearchFacet.class).ifPresent((searchFacet) -> {
-        String indexName = repositoryNameMapping.get(repository.getName());
-        if (indexName != null
-            && repository.getConfiguration().isOnline()
-            && securityHelper.allPermitted(new RepositoryViewPermission(repository, BreadActions.BROWSE))) {
-          indexes.add(indexName);
-        }
-      });
-    }
-    return indexes.toArray(new String[indexes.size()]);
+  private String[] getSearchableIndexes(final boolean skipPermissionCheck) {
+    return getSearchableIndexes(skipPermissionCheck, null);
+  }
+
+  @VisibleForTesting
+  String[] getSearchableIndexes(final boolean skipPermissionCheck, final Collection<String> repoChoices) {
+    Predicate<String> repoChoicesFilter = repoChoices == null ? s -> true : repoChoices::contains;
+    return StreamSupport.stream(repositoryManager.browse().spliterator(), false)
+        .map(repo -> {
+          if (repoOnlineAndHasSearchFacet(repo) && (repositoryNameMapping.containsKey(repo.getName()))
+              && (skipPermissionCheck || securityHelper.allPermitted(new RepositoryViewPermission(repo, BROWSE)))) {
+            return repo.getName();
+          }
+          return null;
+        })
+        .filter(Objects::nonNull)
+        .filter(repoChoicesFilter)
+        .map(repositoryNameMapping::get)
+        .toArray(String[]::new);
+  }
+
+  private static boolean repoOnlineAndHasSearchFacet(Repository repo) {
+    return repo.optionalFacet(SearchFacet.class).isPresent() && repo.getConfiguration().isOnline();
   }
 
   /**

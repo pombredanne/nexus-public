@@ -13,6 +13,7 @@
 package org.sonatype.nexus.common.collect;
 
 import java.lang.reflect.Constructor;
+import java.util.Date;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.Map.Entry;
@@ -65,6 +66,12 @@ public class AttributesMap
     if (value != null) {
       // TODO: PropertyEditor coercion?
       log.trace("Coerce: {} -> {}", value, type);
+
+      // special handling for when Date has become a long (ms since epoch)
+      if (Date.class.equals(type.getRawType()) && value instanceof Number) {
+        return (T) new Date(((Number) value).longValue());
+      }
+
       return (T) type.getRawType().cast(value);
     }
     return null;
@@ -116,7 +123,8 @@ public class AttributesMap
         value = ctor.newInstance();
       }
       catch (Exception e) {
-        throw Throwables.propagate(e);
+        Throwables.throwIfUnchecked(e);
+        throw new RuntimeException(e);
       }
       set(type, value);
     }

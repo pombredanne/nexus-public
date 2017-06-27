@@ -13,6 +13,7 @@
 package org.sonatype.nexus.karaf;
 
 import java.io.File;
+import java.nio.file.Files;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -26,12 +27,8 @@ import org.osgi.framework.Version;
 public class NexusMain
     extends org.apache.karaf.main.Main
 {
-
-  private static final Version MINIMUM_JAVA_VERSION = new Version(1, 8, 0);
-
-  private static final String KARAF_INSTANCES = "karaf.instances";
-
-  private static final String KARAF_DATA = "karaf.data";
+  //Visibile for testing
+  static final Version MINIMUM_JAVA_VERSION = new Version(1, 8, 0);
 
   Logger log = Logger.getLogger(this.getClass().getName());
 
@@ -43,6 +40,7 @@ public class NexusMain
    * Adapted from {@link org.apache.karaf.main.Main#main(String[])} to call our constructor.
    */
   public static void main(final String[] args) throws Exception {
+    System.setProperty("java.util.logging.manager", "org.sonatype.nexus.karaf.NonResettableLogManager");
     while (true) {
       boolean restart = false;
       System.setProperty("karaf.restart", "false");
@@ -96,30 +94,73 @@ public class NexusMain
   public void launch() throws Exception {
     requireMinimumJavaVersion();
 
-    // ensure karaf.data is set
-    String dataDir = System.getProperty(KARAF_DATA);
-    if (dataDir == null) {
-      throw new RuntimeException("Missing required system-property: " + KARAF_DATA);
-    }
+    File baseDir = getDirectory("karaf.base");
+    File dataDir = getDirectory("karaf.data");
 
-    // if karaf.instances is not set, automatically set it under karaf.data
-    String instancesDir = System.getProperty(KARAF_INSTANCES);
-    if (instancesDir == null) {
-      instancesDir = new File(new File(dataDir), "instances").getAbsolutePath();
-      System.setProperty(KARAF_INSTANCES, instancesDir);
-    }
+    // default properties required immediately at launch
+    setDirectory("karaf.instances", dataDir, "instances");
+    setDirectory("karaf.etc", baseDir, "etc/karaf");
+    setDirectory("logback.etc", baseDir, "etc/logback");
 
     log.info("Launching Nexus..."); // temporary logging just to show custom launcher is being used in ITs
     super.launch();
     log.info("...launched Nexus!");
   }
 
-  private static void requireMinimumJavaVersion() {
-    String currentVersion = System.getProperty("java.version");
-    if (MINIMUM_JAVA_VERSION.compareTo(new Version(currentVersion.replace('_', '.'))) > 0) {
+  private IllegalArgumentException badArgument(final String format, final Object... args) {
+    String message = String.format(format, args);
+    Object cause = args.length > 0 ? args[args.length - 1] : null;
+    if (cause instanceof Throwable) {
+      log.log(Level.SEVERE, message, (Throwable) cause);
+      return new IllegalArgumentException(message, (Throwable) cause);
+    }
+    log.log(Level.SEVERE, message);
+    return new IllegalArgumentException(message);
+  }
+
+  private File getDirectory(final String propertyName) {
+    String path = System.getProperty(propertyName);
+    if (path == null || path.trim().isEmpty()) {
+      throw badArgument("Missing property %s", propertyName);
+    }
+    try {
+      File directory = new File(path).getCanonicalFile();
+      if (!directory.isDirectory()) {
+        Files.createDirectories(directory.toPath());
+      }
+      return directory;
+    }
+    catch (Exception e) {
+      throw badArgument("No such directory %s (%s)", path, propertyName, e);
+    }
+  }
+
+  private static void setDirectory(final String propertyName, final File parent, final String child) {
+    System.setProperty(propertyName, new File(parent, child).getAbsolutePath());
+  }
+
+  //Visible for testing
+  static void requireMinimumJavaVersion() {
+    if (isNotSupportedVersion(System.getProperty("java.version"))) {
       // logging is not configured yet, so use console
       System.err.println("Nexus requires minimum java.version: " + MINIMUM_JAVA_VERSION);
-      System.exit(-1);
+      if (versionCheckRequired()) {
+        System.exit(-1);
+      }
     }
+  }
+
+  private static boolean isNotSupportedVersion(final String currentVersion) {
+    try {
+      return MINIMUM_JAVA_VERSION.compareTo(new Version(currentVersion.replace('_', '.'))) > 0;
+    }
+    catch (IllegalArgumentException e) { // NOSONAR
+      System.err.println(e.getMessage()); // NOSONAR
+      return true;
+    }
+  }
+
+  private static boolean versionCheckRequired() {
+    return Boolean.parseBoolean(System.getProperty("nexus.vmCheck", "true"));
   }
 }

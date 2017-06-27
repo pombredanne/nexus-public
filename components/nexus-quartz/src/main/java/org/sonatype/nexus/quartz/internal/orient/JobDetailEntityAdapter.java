@@ -14,18 +14,19 @@ package org.sonatype.nexus.quartz.internal.orient;
 
 import java.util.function.Predicate;
 
+import javax.annotation.Nullable;
 import javax.inject.Named;
 import javax.inject.Singleton;
 
+import org.sonatype.nexus.common.entity.EntityEvent;
+import org.sonatype.nexus.common.entity.EntityMetadata;
 import org.sonatype.nexus.orient.OClassNameBuilder;
 import org.sonatype.nexus.orient.OIndexNameBuilder;
+import org.sonatype.nexus.orient.entity.AttachedEntityMetadata;
 import org.sonatype.nexus.orient.entity.action.BrowseEntitiesWithPredicateAction;
 import org.sonatype.nexus.orient.entity.action.DeleteEntitiesAction;
-import org.sonatype.nexus.orient.entity.marshal.FieldObjectMapper;
-import org.sonatype.nexus.orient.entity.marshal.JacksonMarshaller;
-import org.sonatype.nexus.orient.entity.marshal.MarshalledEntityAdapter;
-import org.sonatype.nexus.orient.entity.marshal.Marshaller;
 
+import com.orientechnologies.orient.core.db.document.ODatabaseDocumentTx;
 import com.orientechnologies.orient.core.metadata.schema.OClass;
 import com.orientechnologies.orient.core.metadata.schema.OClass.INDEX_TYPE;
 import com.orientechnologies.orient.core.metadata.schema.OType;
@@ -58,6 +59,18 @@ public class JobDetailEntityAdapter
       .property(P_NAME)
       .property(P_GROUP)
       .build();
+
+  private final ReadEntityByKeyAction<JobDetailEntity> readByKey =
+      new ReadEntityByKeyAction<>(this, P_NAME, P_GROUP);
+
+  private final ExistsByKeyAction existsByKey = new ExistsByKeyAction(this, P_NAME, P_GROUP);
+
+  private final BrowseEntitiesWithPredicateAction<JobDetailEntity> browseWithPredicate =
+      new BrowseEntitiesWithPredicateAction<>(this);
+
+  private final DeleteEntityByKeyAction deleteByKey = new DeleteEntityByKeyAction(this, P_NAME, P_GROUP);
+
+  private final DeleteEntitiesAction deleteAll = new DeleteEntitiesAction(this);
 
   public JobDetailEntityAdapter() {
     super(DB_CLASS, createMarshaller(), JobDetailEntity.class.getClassLoader());
@@ -113,28 +126,70 @@ public class JobDetailEntityAdapter
 
   /**
    * Read a single entity by a {@link JobKey}.
+   * 
+   * @since 3.1
    */
-  public final ReadEntityByKeyAction<JobDetailEntity> readyByKey =
-      new ReadEntityByKeyAction<>(this, P_NAME, P_GROUP);
+  @Nullable
+  public JobDetailEntity readByKey(final ODatabaseDocumentTx db, final JobKey key) {
+    return readByKey.execute(db, key);
+  }
 
   /**
    * Check if an entity exists for a {@link JobKey}.
+   * 
+   * @since 3.1
    */
-  public final ExistsByKeyAction existsByKey = new ExistsByKeyAction(this, P_NAME, P_GROUP);
+  public boolean existsByKey(final ODatabaseDocumentTx db, final JobKey key) {
+    return existsByKey.execute(db, key);
+  }
 
   /**
    * Browse all entities matching given {@link Predicate}.
+   * 
+   * @since 3.1
    */
-  public final BrowseEntitiesWithPredicateAction<JobDetailEntity> browseWithPredicate =
-      new BrowseEntitiesWithPredicateAction<>(this);
+  public Iterable<JobDetailEntity> browseWithPredicate(final ODatabaseDocumentTx db,
+                                                       final Predicate<JobDetailEntity> predicate)
+  {
+    return browseWithPredicate.execute(db, predicate);
+  }
 
   /**
    * Delete a single entity matching {@link JobKey}.
+   * 
+   * @since 3.1
    */
-  public final DeleteEntityByKeyAction deleteByKey = new DeleteEntityByKeyAction(this, P_NAME, P_GROUP);
+  public boolean deleteByKey(final ODatabaseDocumentTx db, final JobKey key) {
+    return deleteByKey.execute(db, key);
+  }
 
   /**
    * Delete all entities.
+   * 
+   * @since 3.1
    */
-  public final DeleteEntitiesAction deleteAll = new DeleteEntitiesAction(this);
+  public void deleteAll(final ODatabaseDocumentTx db) {
+    deleteAll.execute(db);
+  }
+
+  @Override
+  public boolean sendEvents() {
+    return true;
+  }
+
+  @Override
+  public EntityEvent newEvent(final ODocument document, final EventKind eventKind) {
+    EntityMetadata metadata = new AttachedEntityMetadata(this, document);
+
+    switch (eventKind) {
+      case CREATE:
+        return new JobCreatedEvent(metadata);
+      case UPDATE:
+        return new JobUpdatedEvent(metadata);
+      case DELETE:
+        return new JobDeletedEvent(metadata);
+      default:
+        return null;
+    }
+  }
 }

@@ -14,6 +14,8 @@ package org.sonatype.nexus.repository.httpclient;
 
 import javax.annotation.Nullable;
 
+import org.joda.time.DateTime;
+
 import static com.google.common.base.Preconditions.checkNotNull;
 
 /**
@@ -23,21 +25,32 @@ import static com.google.common.base.Preconditions.checkNotNull;
  */
 public class RemoteConnectionStatus
 {
-  private final String description;
+  private final RemoteConnectionStatusType type;
 
   private final String reason;
 
-  public RemoteConnectionStatus(final String description) {
-    this(description, null);
+  private DateTime blockedUntil;
+
+  private String requestUrl;
+
+  public RemoteConnectionStatus(final RemoteConnectionStatusType type) {
+    this(type, null);
   }
 
-  public RemoteConnectionStatus(final String description, @Nullable final String reason) {
-    this.description = checkNotNull(description);
+  public RemoteConnectionStatus(final RemoteConnectionStatusType type, @Nullable final String reason) {
+    this.type = checkNotNull(type);
     this.reason = reason;
   }
 
   public String getDescription() {
-    return description;
+    return type.getDescription();
+  }
+
+  /**
+   * @since 3.3
+   */
+  public RemoteConnectionStatusType getType() {
+    return type;
   }
 
   @Nullable
@@ -47,10 +60,42 @@ public class RemoteConnectionStatus
 
   @Override
   public String toString() {
-    StringBuilder sb = new StringBuilder(description);
+    StringBuilder sb = new StringBuilder(type.getDescription());
     if (reason != null) {
       sb.append(" - ").append(reason);
     }
     return sb.toString();
+  }
+
+  /**
+   * @since 3.3
+   */
+  @Nullable
+  public DateTime getBlockedUntil() {
+    return blockedUntil;
+  }
+
+  /**
+   * @since 3.3
+   */
+  public RemoteConnectionStatus setBlockedUntil(@Nullable final DateTime blockedUntil) {
+    this.blockedUntil = blockedUntil;
+    return this;
+  }
+
+  /**
+   * @since 3.3
+   */
+  @Nullable
+  public String getRequestUrl() {
+    return requestUrl;
+  }
+
+  /**
+   * @since 3.3
+   */
+  public RemoteConnectionStatus setRequestUrl(@Nullable final String requestUrl) {
+    this.requestUrl = requestUrl;
+    return this;
   }
 }

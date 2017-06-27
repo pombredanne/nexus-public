@@ -12,6 +12,7 @@
  */
 package org.sonatype.nexus.repository.storage;
 
+import java.util.Collections;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
@@ -23,11 +24,9 @@ import org.sonatype.nexus.common.entity.EntityHelper;
 import org.sonatype.nexus.orient.entity.AttachedEntityId;
 import org.sonatype.nexus.orient.entity.IterableEntityAdapter;
 
-import com.google.common.base.Function;
 import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
-import com.google.common.collect.Lists;
 import com.orientechnologies.orient.core.db.document.ODatabaseDocumentTx;
 import com.orientechnologies.orient.core.id.ORID;
 import com.orientechnologies.orient.core.metadata.schema.OClass;
@@ -38,6 +37,8 @@ import org.joda.time.DateTime;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
+import static com.google.common.collect.Iterables.isEmpty;
+import static org.sonatype.nexus.common.text.Strings2.isBlank;
 
 /**
  * {@link MetadataNode} entity-adapter.
@@ -118,14 +119,14 @@ public abstract class MetadataNodeEntityAdapter<T extends MetadataNode<?>>
     checkState(EntityHelper.hasMetadata(bucket));
 
     Map<String, Object> parameters = ImmutableMap.<String, Object>of(
-        "bucket", bucketEntityAdapter.recordIdentity(bucket)
+        P_BUCKET, bucketEntityAdapter.recordIdentity(bucket)
     );
     String query = String.format(
         "select from %s where %s = :bucket",
         getTypeName(), P_BUCKET
     );
     Iterable<ODocument> docs = OrientAsyncHelper.asyncIterable(db, query, parameters);
-    return readEntities(docs);
+    return transform(docs);
   }
 
   T findByProperty(final ODatabaseDocumentTx db,
@@ -137,7 +138,7 @@ public abstract class MetadataNodeEntityAdapter<T extends MetadataNode<?>>
     checkNotNull(bucket);
 
     Map<String, Object> parameters = ImmutableMap.of(
-        "bucket", bucketEntityAdapter.recordIdentity(bucket),
+        P_BUCKET, bucketEntityAdapter.recordIdentity(bucket),
         "propValue", propValue
     );
     String query = String.format(
@@ -156,9 +157,15 @@ public abstract class MetadataNodeEntityAdapter<T extends MetadataNode<?>>
                             @Nullable final String querySuffix)
   {
     String query = buildQuery(false, whereClause, buckets, querySuffix);
+
+    if (isBlank(query)) {
+      log.debug("Skipped finding {}s as query is empty, parameters: {}", getTypeName(), parameters);
+      return Collections.emptyList();
+    }
+
     log.debug("Finding {}s with query: {}, parameters: {}", getTypeName(), query, parameters);
     Iterable<ODocument> docs = db.command(new OCommandSQL(query)).execute(parameters);
-    return readEntities(docs);
+    return transform(docs);
   }
 
   long countByQuery(final ODatabaseDocumentTx db,
@@ -168,6 +175,12 @@ public abstract class MetadataNodeEntityAdapter<T extends MetadataNode<?>>
                     @Nullable final String querySuffix)
   {
     String query = buildQuery(true, whereClause, buckets, querySuffix);
+
+    if (isBlank(query)) {
+      log.debug("Skipped counting {}s as query is empty, parameters: {}", getTypeName(), parameters);
+      return 0;
+    }
+
     log.debug("Counting {}s with query: {}, parameters: {}", getTypeName(), query, parameters);
     List<ODocument> results = db.command(new OCommandSQL(query)).execute(parameters);
     return results.get(0).field("count");
@@ -178,6 +191,11 @@ public abstract class MetadataNodeEntityAdapter<T extends MetadataNode<?>>
                             @Nullable final Iterable<Bucket> buckets,
                             @Nullable final String querySuffix)
   {
+    // constrained by buckets, but no buckets were provided
+    if (buckets != null && isEmpty(buckets)) {
+      return "";
+    }
+
     StringBuilder query = new StringBuilder();
     query.append("select");
     if (isCount) {
@@ -204,39 +222,20 @@ public abstract class MetadataNodeEntityAdapter<T extends MetadataNode<?>>
                                       @Nullable final Iterable<Bucket> buckets,
                                       final StringBuilder query)
   {
-    if (buckets != null) {
-      List<String> bucketConstraints = Lists.newArrayList(
-          Iterables.transform(buckets, new Function<Bucket, String>()
-          {
-            @Override
-            public String apply(final Bucket bucket) {
-              return String.format("%s=%s", P_BUCKET, bucketEntityAdapter.recordIdentity(bucket));
-            }
-          }).iterator());
-      if (bucketConstraints.size() > 0) {
-        if (whereClause == null) {
-          query.append(" where");
-        }
-        else {
-          query.append(" and");
-        }
-        query.append(" (");
-        query.append(Joiner.on(" or ").join(bucketConstraints));
-        query.append(")");
+    if (buckets != null && !isEmpty(buckets)) {
+      if (whereClause == null) {
+        query.append(" where ");
       }
+      else {
+        query.append(" and ");
+      }
+
+      query.append('(');
+      Joiner.on(" or ").appendTo(query,
+          Iterables.transform(buckets, bucket ->
+              String.format("%s=%s", P_BUCKET, bucketEntityAdapter.recordIdentity(bucket).toString())
+          ));
+      query.append(')');
     }
   }
-
-  protected Iterable<T> readEntities(final Iterable<ODocument> documents) {
-    return Iterables.transform(
-        documents,
-        new Function<ODocument, T>()
-        {
-          @Override
-          public T apply(final ODocument doc) {
-            return readEntity(doc);
-          }
-        });
-  }
-
 }

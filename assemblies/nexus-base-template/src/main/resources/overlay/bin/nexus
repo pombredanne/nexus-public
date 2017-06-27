@@ -15,12 +15,16 @@ fi
 # Set up some easily accessible MIN/MAX params for JVM mem usage
 #
 if [ "x$JAVA_MIN_MEM" = "x" ]; then
-    JAVA_MIN_MEM=128M
+    JAVA_MIN_MEM=1200M
     export JAVA_MIN_MEM
 fi
 if [ "x$JAVA_MAX_MEM" = "x" ]; then
-    JAVA_MAX_MEM=512M
+    JAVA_MAX_MEM=1200M
     export JAVA_MAX_MEM
+fi
+if [ "x$DIRECT_MAX_MEM" = "x" ]; then
+    DIRECT_MAX_MEM=2G
+    export DIRECT_MAX_MEM
 fi
 
 #
@@ -121,7 +125,7 @@ locateData() {
             die "KARAF_DATA is not valid: $KARAF_DATA"
         fi
     else
-        KARAF_DATA=$KARAF_BASE/data
+        KARAF_DATA=$KARAF_BASE/../sonatype-work/nexus3
     fi
 }
 
@@ -131,7 +135,7 @@ locateEtc() {
             die "KARAF_ETC is not valid: $KARAF_ETC"
         fi
     else
-        KARAF_ETC=$KARAF_BASE/etc
+        KARAF_ETC=$KARAF_BASE/etc/karaf
     fi
 }
 
@@ -258,7 +262,12 @@ setupDebugOptions() {
 }
 
 setupDefaults() {
-    DEFAULT_JAVA_OPTS="-Xms$JAVA_MIN_MEM -Xmx$JAVA_MAX_MEM -XX:+UnlockDiagnosticVMOptions -XX:+UnsyncloadClass "
+    # SONATYPE: preferred IPv4 by default
+    if [ "x$KARAF_OPTS" = "x" ]; then
+        KARAF_OPTS="-Djava.net.preferIPv4Stack=true"
+    fi
+
+    DEFAULT_JAVA_OPTS="-Xms$JAVA_MIN_MEM -Xmx$JAVA_MAX_MEM -XX:MaxDirectMemorySize=$DIRECT_MAX_MEM -XX:+UnlockDiagnosticVMOptions -XX:+UnsyncloadClass -XX:+LogVMOutput -XX:LogFile=../sonatype-work/nexus3/log/jvm.log "
 
     #Set the JVM_VENDOR specific JVM flags
     if [ "$JVM_VENDOR" = "SUN" ]; then
@@ -364,6 +373,11 @@ run() {
             'run' | 'console')
                 shift
                 ;;
+            'start')
+                NOHUP="true"
+                OPTS="-Dkaraf.startLocalConsole=false -Dkaraf.startRemoteShell=true"
+                shift
+                ;;
             'server')
                 OPTS="-Dkaraf.startLocalConsole=false -Dkaraf.startRemoteShell=true"
                 shift
@@ -396,10 +410,17 @@ run() {
     fi
     cd "$KARAF_BASE"
 
+    # SONATYPE: prepare log and tmp directories
+    mkdir -p "$KARAF_DATA/log" "$KARAF_DATA/tmp"
+
     # SONATYPE: removed -Djavax.management.builder.initial
     # SONATYPE: removed -Djava.endorsed.dirs="${JAVA_ENDORSED_DIRS}"
     # SONATYPE: removed -Djava.ext.dirs="${JAVA_EXT_DIRS}"
-    exec "$JAVA" $JAVA_OPTS -Dkaraf.instances="${KARAF_DATA}/instances" -Dkaraf.home="$KARAF_HOME" -Dkaraf.base="$KARAF_BASE" -Dkaraf.data="$KARAF_DATA" -Dkaraf.etc="$KARAF_ETC" -Djava.io.tmpdir="$KARAF_DATA/tmp" -Djava.util.logging.config.file="$KARAF_BASE/etc/java.util.logging.properties" $KARAF_OPTS $OPTS -classpath "$CLASSPATH" $MAIN "$@"
+    if [ "$NOHUP" = "true" ]; then
+        exec nohup "$JAVA" $JAVA_OPTS -Dkaraf.instances="${KARAF_DATA}/instances" -Dkaraf.home="$KARAF_HOME" -Dkaraf.base="$KARAF_BASE" -Dkaraf.data="$KARAF_DATA" -Dkaraf.etc="$KARAF_ETC" -Djava.io.tmpdir="$KARAF_DATA/tmp" -Djava.util.logging.config.file="$KARAF_ETC/java.util.logging.properties" $KARAF_OPTS $OPTS -classpath "$CLASSPATH" $MAIN "$@" > /dev/null 2>&1 &
+    else
+        exec "$JAVA" $JAVA_OPTS -Dkaraf.instances="${KARAF_DATA}/instances" -Dkaraf.home="$KARAF_HOME" -Dkaraf.base="$KARAF_BASE" -Dkaraf.data="$KARAF_DATA" -Dkaraf.etc="$KARAF_ETC" -Djava.io.tmpdir="$KARAF_DATA/tmp" -Djava.util.logging.config.file="$KARAF_ETC/java.util.logging.properties" $KARAF_OPTS $OPTS -classpath "$CLASSPATH" $MAIN "$@"
+    fi
 }
 
 main() {

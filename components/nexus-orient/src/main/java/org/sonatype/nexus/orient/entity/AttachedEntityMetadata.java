@@ -12,15 +12,19 @@
  */
 package org.sonatype.nexus.orient.entity;
 
+import java.util.Optional;
+
 import javax.annotation.Nonnull;
 
 import org.sonatype.nexus.common.entity.DetachedEntityId;
 import org.sonatype.nexus.common.entity.DetachedEntityMetadata;
 import org.sonatype.nexus.common.entity.DetachedEntityVersion;
+import org.sonatype.nexus.common.entity.Entity;
 import org.sonatype.nexus.common.entity.EntityId;
 import org.sonatype.nexus.common.entity.EntityMetadata;
 import org.sonatype.nexus.common.entity.EntityVersion;
 
+import com.google.common.base.Throwables;
 import com.orientechnologies.orient.core.record.impl.ODocument;
 
 import static com.google.common.base.Preconditions.checkNotNull;
@@ -45,7 +49,7 @@ public class AttachedEntityMetadata
     this.owner = checkNotNull(owner);
     this.document = checkNotNull(document);
     this.id = new AttachedEntityId(owner, document.getIdentity());
-    this.version = new AttachedEntityVersion(owner, document.getRecordVersion());
+    this.version = new AttachedEntityVersion(owner, document.getVersion());
   }
 
   public EntityAdapter getOwner() {
@@ -81,7 +85,37 @@ public class AttachedEntityMetadata
   @Override
   public String toString() {
     return getClass().getSimpleName() + "{" +
-        "document=" + document +
+        "schema=" + owner.getTypeName() +
+        ", document=" + safeDocumentToString() +
         '}';
+  }
+
+  private String safeDocumentToString() {
+    try {
+      return document.toString();
+    }
+    catch (Exception e) { // NOSONAR
+      return document.getIdentity().toString();
+    }
+  }
+
+  @Override
+  public <T> Optional<Class<T>> getEntityType() {
+    return Optional.of(getOwner().getEntityType());
+  }
+
+  @Override
+  public <T extends Entity> Optional<T> getEntity() {
+    final Entity newEntity = getOwner().newEntity();
+    newEntity.setEntityMetadata(this);
+    try {
+      getOwner().readFields(getDocument(), newEntity);
+    }
+    catch (Exception e) {
+      Throwables.throwIfUnchecked(e);
+      throw new RuntimeException(e);
+    }
+
+    return Optional.of((T) newEntity);
   }
 }

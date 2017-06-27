@@ -15,25 +15,25 @@ package org.sonatype.nexus.quartz.internal.orient;
 import java.util.List;
 import java.util.function.Predicate;
 
+import javax.annotation.Nullable;
 import javax.inject.Named;
 import javax.inject.Singleton;
 
+import org.sonatype.nexus.common.entity.EntityEvent;
+import org.sonatype.nexus.common.entity.EntityMetadata;
 import org.sonatype.nexus.orient.OClassNameBuilder;
 import org.sonatype.nexus.orient.OIndexNameBuilder;
+import org.sonatype.nexus.orient.entity.AttachedEntityMetadata;
 import org.sonatype.nexus.orient.entity.action.BrowseEntitiesByPropertyAction;
 import org.sonatype.nexus.orient.entity.action.BrowseEntitiesWithPredicateAction;
 import org.sonatype.nexus.orient.entity.action.DeleteEntitiesAction;
-import org.sonatype.nexus.orient.entity.marshal.FieldObjectMapper;
-import org.sonatype.nexus.orient.entity.marshal.JacksonMarshaller;
-import org.sonatype.nexus.orient.entity.marshal.MarshalledEntityAdapter;
-import org.sonatype.nexus.orient.entity.marshal.Marshaller;
+import org.sonatype.nexus.orient.entity.action.DeleteEntityByPropertyAction;
 
 import com.orientechnologies.orient.core.db.document.ODatabaseDocumentTx;
 import com.orientechnologies.orient.core.metadata.schema.OClass;
 import com.orientechnologies.orient.core.metadata.schema.OClass.INDEX_TYPE;
 import com.orientechnologies.orient.core.metadata.schema.OType;
 import com.orientechnologies.orient.core.record.impl.ODocument;
-import com.orientechnologies.orient.core.sql.OCommandSQL;
 import com.orientechnologies.orient.core.sql.query.OSQLSynchQuery;
 import org.quartz.CronExpression;
 import org.quartz.JobKey;
@@ -90,6 +90,30 @@ public class TriggerEntityAdapter
       .type(DB_CLASS)
       .property(P_STATE)
       .build();
+
+  private final ReadEntityByKeyAction<TriggerEntity> readByKey =
+      new ReadEntityByKeyAction<>(this, P_NAME, P_GROUP);
+
+  private final ExistsByKeyAction existsByKey = new ExistsByKeyAction(this, P_NAME, P_GROUP);
+
+  public final BrowseEntitiesByPropertyAction<TriggerEntity> browseByState =
+      new BrowseEntitiesByPropertyAction<>(this, P_STATE);
+  
+  private final BrowseEntitiesByPropertyAction<TriggerEntity> browseByGroup =
+      new BrowseEntitiesByPropertyAction<>(this, P_GROUP);
+
+  private final BrowseEntitiesByPropertyAction<TriggerEntity> browseByCalendarName =
+      new BrowseEntitiesByPropertyAction<>(this, P_CALENDAR_NAME);
+
+  private final BrowseEntitiesWithPredicateAction<TriggerEntity> browseWithPredicate =
+      new BrowseEntitiesWithPredicateAction<>(this);
+
+  private final DeleteEntityByKeyAction deleteByKey = new DeleteEntityByKeyAction(this, P_NAME, P_GROUP);
+
+  private final DeleteEntitiesAction deleteAll = new DeleteEntitiesAction(this);
+
+  private final DeleteEntityByPropertyAction deleteByJobKey = new DeleteEntityByPropertyAction(this, P_JOB_NAME,
+      P_JOB_GROUP);
 
   public TriggerEntityAdapter() {
     super(DB_CLASS, createMarshaller(), OperableTrigger.class.getClassLoader());
@@ -166,48 +190,76 @@ public class TriggerEntityAdapter
 
   /**
    * Read a single entity matching {@link TriggerKey}.
+   * 
+   * @since 3.1
    */
-  public final ReadEntityByKeyAction<TriggerEntity> readyByKey =
-      new ReadEntityByKeyAction<>(this, P_NAME, P_GROUP);
+  @Nullable
+  public TriggerEntity readByKey(final ODatabaseDocumentTx db, final TriggerKey key) {
+    return readByKey.execute(db, key);
+  }
 
   /**
    * Check if an entity exists for a {@link TriggerKey}.
+   * 
+   * @since 3.1
    */
-  public final ExistsByKeyAction existsByKey = new ExistsByKeyAction(this, P_NAME, P_GROUP);
+  public boolean existsByKey(final ODatabaseDocumentTx db, final TriggerKey key) {
+    return existsByKey.execute(db, key);
+  }
 
   /**
    * Browse all entities which have a matching state property.
+   * 
+   * @since 3.1
    */
-  public final BrowseEntitiesByPropertyAction<TriggerEntity> browseByState =
-      new BrowseEntitiesByPropertyAction<>(this, P_STATE);
+  public Iterable<TriggerEntity> browseByState(final ODatabaseDocumentTx db, final Object state) {
+    return browseByState.execute(db, state);
+  }
 
   /**
    * Browse all entities which have a matching group property.
+   * 
+   * @since 3.1
    */
-  public final BrowseEntitiesByPropertyAction<TriggerEntity> browseByGroup =
-      new BrowseEntitiesByPropertyAction<>(this, P_GROUP);
+  public Iterable<TriggerEntity> browseByGroup(final ODatabaseDocumentTx db, final Object group) {
+    return browseByGroup.execute(db, group);
+  }
 
   /**
    * Browse all entities which have a matching calendar-name property.
+   * 
+   * @since 3.1
    */
-  public final BrowseEntitiesByPropertyAction<TriggerEntity> browseByCalendarName =
-      new BrowseEntitiesByPropertyAction<>(this, P_CALENDAR_NAME);
+  public Iterable<TriggerEntity> browseByCalendarName(final ODatabaseDocumentTx db, final Object calendarName) {
+    return browseByCalendarName.execute(db, calendarName);
+  }
 
   /**
    * Browse all entities matching given {@link Predicate}.
+   * 
+   * @since 3.1
    */
-  public final BrowseEntitiesWithPredicateAction<TriggerEntity> browseWithPredicate =
-      new BrowseEntitiesWithPredicateAction<>(this);
+  public Iterable<TriggerEntity> browseWithPredicate(final ODatabaseDocumentTx db, final Predicate<TriggerEntity> predicate) {
+    return browseWithPredicate.execute(db, predicate);
+  }
 
   /**
    * Delete a single entity matching {@link TriggerKey}.
+   * 
+   * @since 3.1
    */
-  public final DeleteEntityByKeyAction deleteByKey = new DeleteEntityByKeyAction(this, P_NAME, P_GROUP);
+  public boolean deleteByKey(final ODatabaseDocumentTx db, final TriggerKey key) {
+    return deleteByKey.execute(db, key);
+  }
 
   /**
    * Delete all entities.
+   * 
+   * @since 3.1
    */
-  public final DeleteEntitiesAction deleteAll = new DeleteEntitiesAction(this);
+  public void deleteAll(final ODatabaseDocumentTx db) {
+    deleteAll.execute(db);
+  }
 
   private static final String BROWSE_BY_JOB_KEY_QUERY = String.format("SELECT FROM %s WHERE %s = ? AND %s = ?",
       DB_CLASS, P_JOB_NAME, P_JOB_GROUP);
@@ -225,16 +277,31 @@ public class TriggerEntityAdapter
     return transform(results);
   }
 
-  private static final String DELETE_BY_JOB_KEY_QUERY = String.format("DELETE FROM %s WHERE %s = ? AND %s = ?",
-      DB_CLASS, P_JOB_NAME, P_JOB_GROUP);
-
   /**
    * Delete all entities matching {@link JobKey}.
    */
   public void deleteByJobKey(final ODatabaseDocumentTx db, final JobKey jobKey) {
-    checkNotNull(db);
-    checkNotNull(jobKey);
+    deleteByJobKey.execute(db, jobKey.getName(), jobKey.getGroup());
+  }
 
-    db.command(new OCommandSQL(DELETE_BY_JOB_KEY_QUERY)).execute(jobKey.getName(), jobKey.getGroup());
+  @Override
+  public boolean sendEvents() {
+    return true;
+  }
+
+  @Override
+  public EntityEvent newEvent(final ODocument document, final EventKind eventKind) {
+    EntityMetadata metadata = new AttachedEntityMetadata(this, document);
+
+    switch (eventKind) {
+      case CREATE:
+        return new TriggerCreatedEvent(metadata);
+      case UPDATE:
+        return new TriggerUpdatedEvent(metadata);
+      case DELETE:
+        return new TriggerDeletedEvent(metadata);
+      default:
+        return null;
+    }
   }
 }

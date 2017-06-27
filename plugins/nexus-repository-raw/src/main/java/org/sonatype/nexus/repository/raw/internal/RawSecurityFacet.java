@@ -15,8 +15,9 @@ package org.sonatype.nexus.repository.raw.internal;
 import javax.inject.Inject;
 import javax.inject.Named;
 
+import org.sonatype.nexus.repository.security.ContentPermissionChecker;
 import org.sonatype.nexus.repository.security.SecurityFacetSupport;
-import org.sonatype.nexus.security.SecurityHelper;
+import org.sonatype.nexus.repository.security.VariableResolverAdapter;
 
 /**
  * RAW security facet.
@@ -28,9 +29,10 @@ public class RawSecurityFacet
     extends SecurityFacetSupport
 {
   @Inject
-  public RawSecurityFacet(final SecurityHelper securityHelper,
-                          final RawFormatSecurityConfigurationResource securityResource)
+  public RawSecurityFacet(final RawFormatSecurityContributor securityContributor,
+                          @Named("simple") final VariableResolverAdapter variableResolverAdapter,
+                          final ContentPermissionChecker contentPermissionChecker)
   {
-    super(securityHelper, securityResource);
+    super(securityContributor, variableResolverAdapter, contentPermissionChecker);
   }
 }

@@ -15,21 +15,36 @@ package org.sonatype.nexus.internal.orient;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Enumeration;
 import java.util.List;
+import java.util.logging.Level;
+import java.util.logging.LogManager;
+import java.util.logging.Logger;
 
+import javax.annotation.Nullable;
 import javax.inject.Inject;
 import javax.inject.Named;
+import javax.inject.Provider;
 import javax.inject.Singleton;
 
-import org.sonatype.goodies.lifecycle.LifecycleSupport;
 import org.sonatype.nexus.common.app.ApplicationDirectories;
+import org.sonatype.nexus.common.event.EventAware;
+import org.sonatype.nexus.common.log.LoggerLevelChangedEvent;
+import org.sonatype.nexus.common.log.LoggersResetEvent;
+import org.sonatype.nexus.common.node.NodeAccess;
+import org.sonatype.nexus.common.stateguard.Guarded;
+import org.sonatype.nexus.common.stateguard.StateGuardLifecycleSupport;
 import org.sonatype.nexus.jmx.reflect.ManagedAttribute;
 import org.sonatype.nexus.jmx.reflect.ManagedObject;
 import org.sonatype.nexus.orient.DatabaseServer;
+import org.sonatype.nexus.orient.entity.EntityHook;
 
-import com.google.common.base.Charsets;
+import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
+import com.google.common.eventbus.Subscribe;
+import com.orientechnologies.common.log.OLogManager;
 import com.orientechnologies.orient.core.OConstants;
 import com.orientechnologies.orient.core.Orient;
 import com.orientechnologies.orient.core.config.OGlobalConfiguration;
@@ -50,6 +65,7 @@ import com.orientechnologies.orient.server.network.protocol.http.ONetworkProtoco
 import com.orientechnologies.orient.server.network.protocol.http.command.get.OServerCommandGetStaticContent;
 
 import static com.google.common.base.Preconditions.checkNotNull;
+import static org.sonatype.nexus.common.stateguard.StateGuardLifecycleSupport.State.STARTED;
 
 /**
  * Default {@link DatabaseServer} implementation.
@@ -60,9 +76,15 @@ import static com.google.common.base.Preconditions.checkNotNull;
 @Singleton
 @ManagedObject
 public class DatabaseServerImpl
-    extends LifecycleSupport
-    implements DatabaseServer
+    extends StateGuardLifecycleSupport
+    implements DatabaseServer, EventAware, EventAware.Asynchronous, Provider<OServer>
 {
+  private static final String JUL_ROOT_LOGGER = "";
+
+  private static final String ORIENTDB_PARENT_LOGGER = "com";
+
+  private static final String ORIENTDB_LOGGER = ORIENTDB_PARENT_LOGGER + ".orientechnologies";
+
   private final ApplicationDirectories applicationDirectories;
 
   private final List<OServerHandlerConfiguration> injectedHandlers;
@@ -86,15 +108,22 @@ public class DatabaseServerImpl
                             @Named("${nexus.orient.binaryListenerEnabled:-false}") final boolean binaryListenerEnabled,
                             @Named("${nexus.orient.httpListenerEnabled:-false}") final boolean httpListenerEnabled,
                             @Named("${nexus.orient.dynamicPlugins:-false}") final boolean dynamicPlugins,
+                            final NodeAccess nodeAccess,
                             final EntityHook entityHook)
   {
     this.applicationDirectories = checkNotNull(applicationDirectories);
     this.injectedHandlers = checkNotNull(injectedHandlers);
     this.uberClassLoader = checkNotNull(uberClassLoader);
-    this.binaryListenerEnabled = binaryListenerEnabled;
     this.httpListenerEnabled = httpListenerEnabled;
     this.dynamicPlugins = dynamicPlugins;
     this.entityHook = checkNotNull(entityHook);
+
+    if (nodeAccess.isClustered()) {
+      this.binaryListenerEnabled = true; // clustered mode requires binary listener
+    }
+    else {
+      this.binaryListenerEnabled = binaryListenerEnabled;
+    }
 
     log.info("OrientDB version: {}", OConstants.getVersion());
   }
@@ -118,6 +147,7 @@ public class DatabaseServerImpl
 
     // instance startup
     OServer server = new OServer();
+    configureOrientMinimumLogLevel();
     server.setExtensionClassLoader(uberClassLoader);
     OServerConfiguration config = createConfiguration();
     server.startup(config);
@@ -127,12 +157,12 @@ public class DatabaseServerImpl
     server.removeShutdownHook();
 
     // create default root user to avoid orientdb prompt on console
-    server.addUser(OServerConfiguration.SRV_ROOT_ADMIN, null, "*");
+    server.addUser(OServerConfiguration.DEFAULT_ROOT_USER, null, "*");
 
     // Log global configuration
     if (log.isDebugEnabled()) {
       // dumpConfiguration() only accepts ancient stream api
-      String encoding = Charsets.UTF_8.name();
+      String encoding = StandardCharsets.UTF_8.name();
       ByteArrayOutputStream buff = new ByteArrayOutputStream();
       OGlobalConfiguration.dumpConfiguration(new PrintStream(buff, true, encoding));
       log.debug("Global configuration:\n{}", new String(buff.toByteArray(), encoding));
@@ -147,18 +177,24 @@ public class DatabaseServerImpl
   }
 
   private OServerConfiguration createConfiguration() {
-    // FIXME: Unsure what this directory us used for
-    File homeDir = applicationDirectories.getWorkDirectory("orient");
-    System.setProperty("orient.home", homeDir.getPath());
-    System.setProperty(Orient.ORIENTDB_HOME, homeDir.getPath());
+    File configDir = applicationDirectories.getConfigDirectory("fabric");
+
+    // FIXME: Unsure what this directory is used for
+    File orientDir = applicationDirectories.getWorkDirectory("orient");
+    System.setProperty("orient.home", orientDir.getPath());
+    System.setProperty(Orient.ORIENTDB_HOME, orientDir.getPath());
 
     OServerConfiguration config = new OServerConfiguration();
+
     // FIXME: Unsure what this is used for, its apparently assigned to xml location, but forcing it here
     config.location = "DYNAMIC-CONFIGURATION";
 
     File databaseDir = applicationDirectories.getWorkDirectory("db");
+    File securityFile = new File(configDir, "orientdb-security.json");
+
     config.properties = new OServerEntryConfiguration[]{
         new OServerEntryConfiguration("server.database.path", databaseDir.getPath()),
+        new OServerEntryConfiguration("server.security.file", securityFile.getPath()),
         new OServerEntryConfiguration("plugin.dynamic", String.valueOf(dynamicPlugins))
     };
 
@@ -224,6 +260,13 @@ public class DatabaseServerImpl
     // latest advice is to disable DB compression as it doesn't buy much,
     // also snappy has issues with use of native lib (unpacked under tmp)
     OGlobalConfiguration.STORAGE_COMPRESSION_METHOD.setValue("nothing");
+    
+    // ensure we don't set a file lock, which can behave badly on NFS https://issues.sonatype.org/browse/NEXUS-11289
+    OGlobalConfiguration.FILE_LOCK.setValue(false);
+
+    // disable auto removal of servers, SharedHazelcastPlugin removes gracefully shutdown nodes but for crashes and
+    // especially network partitions we don't want the write quorum getting lowered and endanger consistency 
+    OGlobalConfiguration.DISTRIBUTED_AUTO_REMOVE_OFFLINE_SERVERS.setValue(-1);
 
     return config;
   }
@@ -238,5 +281,82 @@ public class DatabaseServerImpl
     Orient.instance().shutdown();
 
     log.info("Shutdown");
+  }
+
+  @Override
+  @Guarded(by = STARTED)
+  public List<String> databases() {
+    return ImmutableList.copyOf(orientServer.getAvailableStorageNames().keySet());
+  }
+
+  @Override
+  @Guarded(by = STARTED)
+  public OServer get() {
+    return orientServer;
+  }
+
+  @Subscribe
+  public void onLoggerLevelChanged(final LoggerLevelChangedEvent event) {
+    String logger = event.getLogger();
+    if (ORIENTDB_LOGGER.startsWith(logger) || logger.startsWith(ORIENTDB_LOGGER)
+        || org.slf4j.Logger.ROOT_LOGGER_NAME.equals(logger)) {
+      configureOrientMinimumLogLevel();
+    }
+  }
+
+  @Subscribe
+  public void onLoggersReset(final LoggersResetEvent event) {
+    configureOrientMinimumLogLevel();
+  }
+
+  /**
+   * Until OrientDB cleans up its logging infrastructure, this synchronizes its global minimum log level to the minimum
+   * log level configured for any of its loggers.
+   * 
+   * @see http://www.prjhub.com/#/issues/3744
+   * @see http://www.prjhub.com/#/issues/5327
+   */
+  private void configureOrientMinimumLogLevel() {
+    int minimumLevel = getOrientMininumLogLevel();
+    log.debug("Configuring OrientDB global minimum log level to {}", minimumLevel);
+    OLogManager logManager = OLogManager.instance();
+    logManager.setDebugEnabled(minimumLevel <= Level.FINE.intValue());
+    logManager.setInfoEnabled(minimumLevel <= Level.INFO.intValue());
+    logManager.setWarnEnabled(minimumLevel <= Level.WARNING.intValue());
+    logManager.setErrorEnabled(minimumLevel <= Level.SEVERE.intValue());
+  }
+
+  private int getOrientMininumLogLevel() {
+    int minimumLogLevel = 0;
+    for (String loggerName : new String[] { ORIENTDB_LOGGER, ORIENTDB_PARENT_LOGGER, JUL_ROOT_LOGGER }) {
+      Integer logLevel = getSafeLogLevel(loggerName);
+      if (logLevel != null) {
+        minimumLogLevel = logLevel;
+        break;
+      }
+    }
+    String orientLoggerPrefix = ORIENTDB_LOGGER + '.';
+    for (Enumeration<String> en = LogManager.getLogManager().getLoggerNames(); en.hasMoreElements()
+        && minimumLogLevel > Level.FINE.intValue();) {
+      String loggerName = en.nextElement();
+      if (!loggerName.startsWith(orientLoggerPrefix)) {
+        continue;
+      }
+      Integer logLevel = getSafeLogLevel(loggerName);
+      if (logLevel != null && logLevel < minimumLogLevel) {
+        minimumLogLevel = logLevel;
+      }
+    }
+    return minimumLogLevel;
+  }
+
+  @Nullable
+  private Integer getSafeLogLevel(final String loggerName) {
+    Logger logger = LogManager.getLogManager().getLogger(loggerName);
+    if (logger == null) {
+      return null;
+    }
+    Level level = logger.getLevel();
+    return (level != null) ? level.intValue() : null;
   }
 }

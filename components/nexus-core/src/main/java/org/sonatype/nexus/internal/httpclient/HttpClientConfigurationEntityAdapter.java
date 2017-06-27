@@ -14,16 +14,19 @@ package org.sonatype.nexus.internal.httpclient;
 
 import java.util.Map;
 
+import javax.annotation.Nullable;
 import javax.inject.Inject;
 import javax.inject.Named;
 import javax.inject.Singleton;
 
 import org.sonatype.goodies.common.Time;
+import org.sonatype.nexus.common.entity.EntityEvent;
+import org.sonatype.nexus.common.entity.EntityMetadata;
 import org.sonatype.nexus.httpclient.config.AuthenticationConfiguration;
 import org.sonatype.nexus.httpclient.config.HttpClientConfiguration;
 import org.sonatype.nexus.orient.OClassNameBuilder;
-import org.sonatype.nexus.orient.entity.EntityAdapter;
-import org.sonatype.nexus.orient.entity.action.SingletonActions;
+import org.sonatype.nexus.orient.entity.AttachedEntityMetadata;
+import org.sonatype.nexus.orient.entity.SingletonEntityAdapter;
 import org.sonatype.nexus.security.PasswordHelper;
 
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -45,7 +48,7 @@ import com.orientechnologies.orient.core.record.impl.ODocument;
 @Named
 @Singleton
 public class HttpClientConfigurationEntityAdapter
-    extends EntityAdapter<HttpClientConfiguration>
+    extends SingletonEntityAdapter<HttpClientConfiguration>
 {
   private static final String DB_CLASS = new OClassNameBuilder()
       .type("http_client")
@@ -121,9 +124,20 @@ public class HttpClientConfigurationEntityAdapter
     document.fromMap(fields);
   }
 
-  //
-  // Actions
-  //
-
-  public final SingletonActions<HttpClientConfiguration> singleton = new SingletonActions<>(this);
+  @Nullable
+  @Override
+  public EntityEvent newEvent(final ODocument document, final EventKind eventKind) {
+    EntityMetadata metadata = new AttachedEntityMetadata(this, document);
+    log.debug("Emitted {} event with metadata {}", eventKind, metadata);
+    switch (eventKind) {
+      case CREATE:
+        return new HttpClientConfigurationCreatedEvent(metadata);
+      case UPDATE:
+        return new HttpClientConfigurationUpdatedEvent(metadata);
+      case DELETE:
+        return new HttpClientConfigurationDeletedEvent(metadata);
+      default:
+        return null;
+    }
+  }
 }

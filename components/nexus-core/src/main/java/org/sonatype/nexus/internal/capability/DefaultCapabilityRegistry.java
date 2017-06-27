@@ -12,7 +12,6 @@
  */
 package org.sonatype.nexus.internal.capability;
 
-import java.io.IOException;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
@@ -41,17 +40,23 @@ import org.sonatype.nexus.capability.CapabilityReference;
 import org.sonatype.nexus.capability.CapabilityRegistry;
 import org.sonatype.nexus.capability.CapabilityRegistryEvent.AfterLoad;
 import org.sonatype.nexus.capability.CapabilityType;
-import org.sonatype.nexus.common.event.EventBus;
+import org.sonatype.nexus.common.event.EventAware;
+import org.sonatype.nexus.common.event.EventManager;
 import org.sonatype.nexus.formfields.Encrypted;
 import org.sonatype.nexus.formfields.FormField;
 import org.sonatype.nexus.internal.capability.storage.CapabilityStorage;
 import org.sonatype.nexus.internal.capability.storage.CapabilityStorageItem;
+import org.sonatype.nexus.internal.capability.storage.CapabilityStorageItemCreatedEvent;
+import org.sonatype.nexus.internal.capability.storage.CapabilityStorageItemDeletedEvent;
+import org.sonatype.nexus.internal.capability.storage.CapabilityStorageItemUpdatedEvent;
 import org.sonatype.nexus.security.PasswordHelper;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Predicate;
 import com.google.common.collect.Collections2;
+import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Maps;
+import com.google.common.eventbus.Subscribe;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static java.lang.String.format;
@@ -65,7 +70,7 @@ import static org.sonatype.nexus.capability.CapabilityType.capabilityType;
 @Named
 public class DefaultCapabilityRegistry
     extends ComponentSupport
-    implements CapabilityRegistry
+    implements CapabilityRegistry, EventAware
 {
 
   private final CapabilityStorage capabilityStorage;
@@ -74,7 +79,7 @@ public class DefaultCapabilityRegistry
 
   private final CapabilityDescriptorRegistry capabilityDescriptorRegistry;
 
-  private final EventBus eventBus;
+  private final EventManager eventManager;
 
   private final ActivationConditionHandlerFactory activationConditionHandlerFactory;
 
@@ -92,7 +97,7 @@ public class DefaultCapabilityRegistry
   DefaultCapabilityRegistry(final CapabilityStorage capabilityStorage,
                             final CapabilityFactoryRegistry capabilityFactoryRegistry,
                             final CapabilityDescriptorRegistry capabilityDescriptorRegistry,
-                            final EventBus eventBus,
+                            final EventManager eventManager,
                             final ActivationConditionHandlerFactory activationConditionHandlerFactory,
                             final ValidityConditionHandlerFactory validityConditionHandlerFactory,
                             final PasswordHelper passwordHelper,
@@ -101,7 +106,7 @@ public class DefaultCapabilityRegistry
     this.capabilityStorage = checkNotNull(capabilityStorage);
     this.capabilityFactoryRegistry = checkNotNull(capabilityFactoryRegistry);
     this.capabilityDescriptorRegistry = checkNotNull(capabilityDescriptorRegistry);
-    this.eventBus = checkNotNull(eventBus);
+    this.eventManager = checkNotNull(eventManager);
     this.activationConditionHandlerFactory = checkNotNull(activationConditionHandlerFactory);
     this.validityConditionHandlerFactory = checkNotNull(validityConditionHandlerFactory);
     this.passwordHelper = checkNotNull(passwordHelper);
@@ -116,7 +121,6 @@ public class DefaultCapabilityRegistry
                                  final boolean enabled,
                                  @Nullable final String notes,
                                  @Nullable final Map<String, String> properties)
-      throws IOException
   {
     checkNotNull(type);
 
@@ -133,26 +137,57 @@ public class DefaultCapabilityRegistry
 
       final Map<String, String> encryptedProps = encryptValuesIfNeeded(descriptor, props);
 
-      final CapabilityIdentity generatedId = capabilityStorage.add(new CapabilityStorageItem(
+      final CapabilityStorageItem item = new CapabilityStorageItem(
           descriptor.version(), type.toString(), enabled, notes, encryptedProps
-      ));
+      );
 
-      log.debug("Added capability '{}' of type '{}' with properties '{}'", generatedId, type, encryptedProps);
+      final CapabilityIdentity generatedId = capabilityStorage.add(item);
 
-      final DefaultCapabilityReference reference = create(generatedId, type, descriptor);
-
-      reference.setNotes(notes);
-      reference.create(props);
-      if (enabled) {
-        reference.enable();
-        reference.activate();
-      }
-
-      return reference;
+      return doAdd(generatedId, type, descriptor, item, props);
     }
     finally {
       lock.writeLock().unlock();
     }
+  }
+
+  @Subscribe
+  public void on(final CapabilityStorageItemCreatedEvent event) {
+    if (!event.isLocal()) {
+      CapabilityIdentity id = event.getCapabilityId();
+      CapabilityStorageItem item = event.getCapabilityStorageItem();
+      CapabilityType type = capabilityType(item.getType());
+
+      try {
+        lock.writeLock().lock();
+
+        CapabilityDescriptor descriptor = capabilityDescriptorRegistry.get(type);
+        Map<String, String> decryptedProps = decryptValuesIfNeeded(descriptor, item.getProperties());
+        doAdd(id, type, descriptor, item, decryptedProps);
+      }
+      finally {
+        lock.writeLock().unlock();
+      }
+    }
+  }
+
+  private CapabilityReference doAdd(final CapabilityIdentity id,
+                                    final CapabilityType type,
+                                    final CapabilityDescriptor descriptor,
+                                    final CapabilityStorageItem item,
+                                    @Nullable final Map<String, String> decryptedProps)
+  {
+    log.debug("Added capability '{}' of type '{}' with properties '{}'", id, type, item.getProperties());
+
+    DefaultCapabilityReference reference = create(id, type, descriptor);
+
+    reference.setNotes(item.getNotes());
+    reference.create(decryptedProps);
+    if (item.isEnabled()) {
+      reference.enable();
+      reference.activate();
+    }
+
+    return reference;
   }
 
   @Override
@@ -160,7 +195,6 @@ public class DefaultCapabilityRegistry
                                     final boolean enabled,
                                     @Nullable final String notes,
                                     @Nullable final Map<String, String> properties)
-      throws IOException
   {
     try {
       lock.writeLock().lock();
@@ -175,54 +209,104 @@ public class DefaultCapabilityRegistry
 
       final Map<String, String> encryptedProps = encryptValuesIfNeeded(reference.descriptor(), props);
 
-      capabilityStorage.update(id, new CapabilityStorageItem(
-              reference.descriptor().version(), reference.type().toString(), enabled, notes, encryptedProps)
+      final CapabilityStorageItem item = new CapabilityStorageItem(
+          reference.descriptor().version(), reference.type().toString(), enabled, notes, encryptedProps
       );
 
-      log.debug(
-          "Updated capability '{}' of type '{}' with properties '{}'", id, reference.type(), encryptedProps
-      );
+      capabilityStorage.update(id, item);
 
-      if (reference.isEnabled() && !enabled) {
-        reference.disable();
-      }
-      reference.setNotes(notes);
-      reference.update(props, reference.properties());
-      if (!reference.isEnabled() && enabled) {
-        reference.enable();
-        reference.activate();
-      }
-
-      return reference;
+      return doUpdate(reference, item, props);
     }
     finally {
       lock.writeLock().unlock();
     }
   }
 
+  @Subscribe
+  public void on(final CapabilityStorageItemUpdatedEvent event) {
+    if (!event.isLocal()) {
+      CapabilityIdentity id = event.getCapabilityId();
+      CapabilityStorageItem item = event.getCapabilityStorageItem();
+
+      try {
+        lock.writeLock().lock();
+
+        DefaultCapabilityReference reference = get(id);
+        Map<String, String> decryptedProps = decryptValuesIfNeeded(reference.descriptor(), item.getProperties());
+        doUpdate(reference, item, decryptedProps);
+      }
+      finally {
+        lock.writeLock().unlock();
+      }
+    }
+  }
+
+  private CapabilityReference doUpdate(final DefaultCapabilityReference reference,
+                                       final CapabilityStorageItem item,
+                                       @Nullable final Map<String, String> decryptedProps)
+  {
+    log.debug("Updated capability '{}' of type '{}' with properties '{}'",
+        reference.id(), reference.type(), item.getProperties());
+
+    if (reference.isEnabled() && !item.isEnabled()) {
+      reference.disable();
+    }
+    reference.setNotes(item.getNotes());
+    reference.update(decryptedProps, reference.properties());
+    if (!reference.isEnabled() && item.isEnabled()) {
+      reference.enable();
+      reference.activate();
+    }
+
+    return reference;
+  }
+
   @Override
-  public CapabilityReference remove(final CapabilityIdentity id) throws IOException {
+  public CapabilityReference remove(final CapabilityIdentity id) {
     try {
       lock.writeLock().lock();
 
       validateId(id);
 
       capabilityStorage.remove(id);
-      log.debug("Removed capability with '{}'", id);
 
-      final DefaultCapabilityReference reference = references.remove(id);
-      if (reference != null) {
-        reference.remove();
-      }
-      return reference;
+      return doRemove(id);
     }
     finally {
       lock.writeLock().unlock();
     }
   }
 
+  @Subscribe
+  public void on(final CapabilityStorageItemDeletedEvent event) {
+    if (!event.isLocal()) {
+      CapabilityIdentity id = event.getCapabilityId();
+
+      try {
+        lock.writeLock().lock();
+
+        doRemove(id);
+      }
+      finally {
+        lock.writeLock().unlock();
+      }
+    }
+  }
+
+  private CapabilityReference doRemove(final CapabilityIdentity id)
+  {
+    log.debug("Removed capability '{}'", id);
+
+    DefaultCapabilityReference reference = references.remove(id);
+    if (reference != null) {
+      reference.remove();
+    }
+
+    return reference;
+  }
+
   @Override
-  public CapabilityReference enable(final CapabilityIdentity id) throws IOException {
+  public CapabilityReference enable(final CapabilityIdentity id) {
     try {
       lock.writeLock().lock();
 
@@ -237,7 +321,7 @@ public class DefaultCapabilityRegistry
   }
 
   @Override
-  public CapabilityReference disable(final CapabilityIdentity id) throws IOException {
+  public CapabilityReference disable(final CapabilityIdentity id) {
     try {
       lock.writeLock().lock();
 
@@ -273,14 +357,14 @@ public class DefaultCapabilityRegistry
     try {
       lock.readLock().lock();
 
-      return references.values();
+      return ImmutableSet.copyOf(references.values());
     }
     finally {
       lock.readLock().unlock();
     }
   }
 
-  public void load() throws IOException {
+  public void load() {
     final Map<CapabilityIdentity, CapabilityStorageItem> items = capabilityStorage.getAll();
     for (final Map.Entry<CapabilityIdentity, CapabilityStorageItem> entry : items.entrySet()) {
       CapabilityIdentity id = entry.getKey();
@@ -344,7 +428,7 @@ public class DefaultCapabilityRegistry
         reference.activate();
       }
     }
-    eventBus.post(new AfterLoad(this));
+    eventManager.post(new AfterLoad(this));
   }
 
   private DefaultCapabilityReference create(final CapabilityIdentity id,
@@ -364,7 +448,7 @@ public class DefaultCapabilityRegistry
 
     log.debug("Created capability '{}'", capability);
 
-    eventBus.post(new CapabilityEvent.Created(this, reference));
+    eventManager.post(new CapabilityEvent.Created(this, reference));
 
     return reference;
   }
@@ -377,7 +461,7 @@ public class DefaultCapabilityRegistry
   {
     return new DefaultCapabilityReference(
         this,
-        eventBus,
+        eventManager,
         activationConditionHandlerFactory,
         validityConditionHandlerFactory,
         id,
@@ -399,7 +483,7 @@ public class DefaultCapabilityRegistry
    * @since 2.7
    */
   private Map<String, String> encryptValuesIfNeeded(final CapabilityDescriptor descriptor,
-                                                    final Map<String, String> props) throws IOException
+                                                    final Map<String, String> props)
   {
     if (props == null || props.isEmpty()) {
       return props;
@@ -415,7 +499,7 @@ public class DefaultCapabilityRegistry
               encrypted.put(formField.getId(), passwordHelper.encrypt(value));
             }
             catch (Exception e) {
-              throw new IOException(
+              throw new RuntimeException(
                   "Could not encrypt value of '" + formField.getType() + "' due to " + e.getMessage(), e
               );
             }
@@ -432,7 +516,7 @@ public class DefaultCapabilityRegistry
    * @since 2.7
    */
   private Map<String, String> decryptValuesIfNeeded(final CapabilityDescriptor descriptor,
-                                                    final Map<String, String> props) throws IOException
+                                                    final Map<String, String> props)
   {
     if (props == null || props.isEmpty()) {
       return props;
@@ -448,7 +532,7 @@ public class DefaultCapabilityRegistry
               decrypted.put(formField.getId(), passwordHelper.decrypt(value));
             }
             catch (Exception e) {
-              throw new IOException(
+              throw new RuntimeException(
                   "Could not decrypt value of '" + formField.getType() + "' due to " + e.getMessage(), e
               );
             }

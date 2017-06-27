@@ -14,8 +14,8 @@ package org.sonatype.nexus.quartz.internal.orient
 
 import org.sonatype.goodies.testsupport.TestSupport
 import org.sonatype.nexus.common.entity.EntityHelper
-import org.sonatype.nexus.orient.DatabaseInstanceRule
 import org.sonatype.nexus.orient.entity.AttachedEntityHelper
+import org.sonatype.nexus.orient.testsupport.DatabaseInstanceRule
 import org.sonatype.nexus.quartz.internal.task.QuartzTaskJob
 
 import org.junit.Before
@@ -31,7 +31,7 @@ class JobDetailEntityAdapterTest
     extends TestSupport
 {
   @Rule
-  public DatabaseInstanceRule database = new DatabaseInstanceRule('test')
+  public DatabaseInstanceRule database = DatabaseInstanceRule.inMemory('test')
 
   private JobDetailEntityAdapter underTest
 
@@ -81,7 +81,7 @@ class JobDetailEntityAdapterTest
 
     // lookup the entity and verify its contents
     database.instance.acquire().withCloseable {db ->
-      def entity2 = underTest.read.execute(db, id1)
+      def entity2 = underTest.read(db, id1)
       println entity2
 
       assert entity2.name == entity1.name

@@ -12,7 +12,6 @@
  */
 package org.sonatype.nexus.internal.capability.storage;
 
-import java.io.IOException;
 import java.util.Map;
 
 import javax.inject.Inject;
@@ -20,16 +19,22 @@ import javax.inject.Named;
 import javax.inject.Provider;
 import javax.inject.Singleton;
 
-import org.sonatype.goodies.lifecycle.LifecycleSupport;
 import org.sonatype.nexus.capability.CapabilityIdentity;
+import org.sonatype.nexus.common.app.ManagedLifecycle;
 import org.sonatype.nexus.common.entity.EntityHelper;
-import org.sonatype.nexus.common.entity.EntityId;
+import org.sonatype.nexus.common.stateguard.Guarded;
+import org.sonatype.nexus.common.stateguard.StateGuardLifecycleSupport;
 import org.sonatype.nexus.orient.DatabaseInstance;
+import org.sonatype.nexus.orient.DatabaseInstanceNames;
 
 import com.google.common.collect.Maps;
 import com.orientechnologies.orient.core.db.document.ODatabaseDocumentTx;
 
 import static com.google.common.base.Preconditions.checkNotNull;
+import static org.sonatype.nexus.common.app.ManagedLifecycle.Phase.SCHEMAS;
+import static org.sonatype.nexus.common.stateguard.StateGuardLifecycleSupport.State.STARTED;
+import static org.sonatype.nexus.orient.transaction.OrientTransactional.inTx;
+import static org.sonatype.nexus.orient.transaction.OrientTransactional.inTxRetry;
 
 /**
  * Orient {@link CapabilityStorage} implementation.
@@ -37,9 +42,10 @@ import static com.google.common.base.Preconditions.checkNotNull;
  * @since 3.0
  */
 @Named("orient")
+@ManagedLifecycle(phase = SCHEMAS)
 @Singleton
 public class OrientCapabilityStorage
-    extends LifecycleSupport
+    extends StateGuardLifecycleSupport
     implements CapabilityStorage
 {
   private final Provider<DatabaseInstance> databaseInstance;
@@ -47,7 +53,7 @@ public class OrientCapabilityStorage
   private final CapabilityStorageItemEntityAdapter entityAdapter;
 
   @Inject
-  public OrientCapabilityStorage(@Named("config") final Provider<DatabaseInstance> databaseInstance,
+  public OrientCapabilityStorage(@Named(DatabaseInstanceNames.CONFIG) final Provider<DatabaseInstance> databaseInstance,
                                  final CapabilityStorageItemEntityAdapter entityAdapter)
   {
     this.databaseInstance = checkNotNull(databaseInstance);
@@ -61,52 +67,32 @@ public class OrientCapabilityStorage
     }
   }
 
-  /**
-   * Open a database connection using the pool.
-   */
-  private ODatabaseDocumentTx openDb() {
-    ensureStarted();
-    return databaseInstance.get().acquire();
-  }
-
   private CapabilityIdentity identity(final CapabilityStorageItem item) {
-    EntityId id = EntityHelper.id(item);
-    return new CapabilityIdentity(id.getValue());
+    return CapabilityStorageItem.identity(EntityHelper.id(item));
   }
 
   @Override
-  public CapabilityIdentity add(final CapabilityStorageItem item) throws IOException {
-    try (ODatabaseDocumentTx db = openDb()) {
-      entityAdapter.addEntity(db, item);
-    }
-
+  @Guarded(by = STARTED)
+  public CapabilityIdentity add(final CapabilityStorageItem item) {
+    inTxRetry(databaseInstance).run(db -> entityAdapter.addEntity(db, item));
     return identity(item);
   }
 
   @Override
-  public boolean update(final CapabilityIdentity id, final CapabilityStorageItem item) throws IOException {
-    try (ODatabaseDocumentTx db = openDb()) {
-      return entityAdapter.edit(db, id.toString(), item);
-    }
+  @Guarded(by = STARTED)
+  public boolean update(final CapabilityIdentity id, final CapabilityStorageItem item) {
+    return inTxRetry(databaseInstance).call(db -> entityAdapter.edit(db, id.toString(), item));
   }
 
   @Override
-  public boolean remove(final CapabilityIdentity id) throws IOException {
-    try (ODatabaseDocumentTx db = openDb()) {
-      return entityAdapter.delete(db, id.toString());
-    }
+  @Guarded(by = STARTED)
+  public boolean remove(final CapabilityIdentity id) {
+    return inTxRetry(databaseInstance).call(db -> entityAdapter.delete(db, id.toString()));
   }
 
   @Override
-  public Map<CapabilityIdentity, CapabilityStorageItem> getAll() throws IOException {
-    Map<CapabilityIdentity, CapabilityStorageItem> items = Maps.newHashMap();
-
-    try (ODatabaseDocumentTx db = openDb()) {
-      for (CapabilityStorageItem item : entityAdapter.browse.execute(db)) {
-        items.put(identity(item), item);
-      }
-    }
-
-    return items;
+  @Guarded(by = STARTED)
+  public Map<CapabilityIdentity, CapabilityStorageItem> getAll() {
+    return inTx(databaseInstance).call(db -> Maps.uniqueIndex(entityAdapter.browse(db), this::identity));
   }
 }

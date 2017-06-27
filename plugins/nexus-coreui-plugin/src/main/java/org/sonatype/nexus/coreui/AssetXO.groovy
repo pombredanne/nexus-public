@@ -44,12 +44,18 @@ class AssetXO
   String repositoryName
 
   @NotEmpty
-  Date lastUpdated
+  String containingRepositoryName
 
-  Date lastAccessed
+  Date blobCreated
+
+  Date blobUpdated
+
+  Date lastDownloaded
   
   @NotEmpty
   String blobRef
+  
+  String componentId
 
   @NotEmpty
   Map<String, Map<String, Object>> attributes

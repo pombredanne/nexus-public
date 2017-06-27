@@ -26,8 +26,6 @@ Ext.define('NX.coreui.migration.RepositoriesStep', {
 
   screen: 'NX.coreui.migration.RepositoriesScreen',
 
-  resetOnBack: true,
-
   /**
    * @override
    */
@@ -60,7 +58,7 @@ Ext.define('NX.coreui.migration.RepositoriesStep', {
     // toggle step enabled when content-options change
     me.getContext().on('add', function(index, value, key, opts) {
       if (key === 'content-options') {
-        me.setEnabled(value['repositories.usermanaged']);
+        me.setEnabled(value['repositories']);
       }
     });
   },
@@ -73,7 +71,7 @@ Ext.define('NX.coreui.migration.RepositoriesStep', {
   prepare: function () {
     var me = this;
 
-    me.mask('Loading');
+    me.mask(NX.I18n.render(me, 'Loading_Mask'));
 
     // ensure blobstore is loaded, for customize window
     me.getStore('Blobstore').load();

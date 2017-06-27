@@ -81,7 +81,6 @@ Ext.define('NX.app.PluginStrings', {
     User_SignIn_Mask: 'Signing in&hellip;',
     SignIn_Username_Empty: 'Username',
     SignIn_Password_Empty: 'Password',
-    SignIn_RememberMe_BoxLabel: 'Remember me',
     SignIn_Submit_Button: 'Sign in',
     SignIn_Cancel_Button: '@Button_Cancel',
 
@@ -112,6 +111,9 @@ Ext.define('NX.app.PluginStrings', {
     // License
     State_Installed_Message: 'License installed',
     State_Uninstalled_Message: 'License uninstalled',
+    State_License_Expiry: 'Your license will expire in {0} days. <a href="http://links.sonatype.com/products/nexus/pro/store">Contact us to renew.</a>',
+    State_License_Expired: 'Your license has expired. <a href="http://links.sonatype.com/products/nexus/pro/store">Contact us to renew.</a>',
+    State_License_Invalid_Message: 'Your license has been detected as missing or invalid. Upload a valid license to proceed.',
 
     // About modal
     AboutWindow_Title: 'About Nexus Repository Manager',
@@ -168,6 +170,7 @@ Ext.define('NX.app.PluginStrings', {
 
     // Field validation messages
     Util_Validator_Text: 'Only letters, digits, underscores(_), hyphens(-), and dots(.) are allowed and may not start with underscore or dot.',
+    Util_Validator_Hostname: 'Hostname must be valid',
 
     // Wizard
     Wizard_Next: '@Button_Next',

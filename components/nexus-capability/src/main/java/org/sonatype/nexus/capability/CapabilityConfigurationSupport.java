@@ -20,8 +20,6 @@ import javax.annotation.Nullable;
 import org.sonatype.goodies.common.ComponentSupport;
 import org.sonatype.nexus.common.text.Strings2;
 
-import com.google.common.base.Throwables;
-
 /**
  * Support for {@link Capability} configuration implementations.
  *
@@ -42,7 +40,7 @@ public abstract class CapabilityConfigurationSupport
       return new URI(value);
     }
     catch (URISyntaxException e) {
-      throw Throwables.propagate(e);
+      throw new RuntimeException(e);
     }
   }
 
@@ -58,10 +56,23 @@ public abstract class CapabilityConfigurationSupport
     return parseUri(value);
   }
 
-  protected boolean parseBoolean(final String value, final boolean defaultValue) {
+  protected Boolean parseBoolean(@Nullable final String value, @Nullable final Boolean defaultValue) {
     if (!isEmpty(value)) {
       return Boolean.parseBoolean(value);
     }
     return defaultValue;
+  }
+
+  /**
+   * Parses the given string value as an integer or returns the specified default value if the string is {@code null}
+   * or empty.
+   * 
+   * @since 3.1
+   */
+  protected Integer parseInteger(@Nullable final String value, @Nullable final Integer defaultValue) {
+    if (isEmpty(value)) {
+      return defaultValue;
+    }
+    return Integer.parseInt(value);
   }
 }

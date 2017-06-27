@@ -12,9 +12,9 @@
  */
 package org.sonatype.nexus.repository.httpbridge.internal;
 
-import java.net.URI;
+import org.sonatype.nexus.repository.BadRequestException;
 
-import javax.annotation.Nullable;
+import org.apache.commons.io.FilenameUtils;
 
 /**
  * A utility class for parsing the repository name and remaining path out of a request URI.
@@ -48,48 +48,47 @@ class RepositoryPath
         '}';
   }
 
-  //
-  // Parser
-  //
-
   /**
-   * @return The parsed path or {@code null}
+   * Validate and parse the path.
+   *
+   * @throws BadRequestException if validation fails
+   *
+   * @return The parsed path
    */
-  @Nullable
-  public static RepositoryPath parse(@Nullable final String input) {
-    // input not be null or empty
+  public static RepositoryPath parse(final String input) {
+    String repo = validateAndExtractRepo(input);
+    String path = validateAndExtractPath(input);
+    return new RepositoryPath(repo, path);
+  }
+
+  private static String validateAndExtractRepo(final String input) {
     if (input == null || input.isEmpty()) {
-      return null;
+      throw new BadRequestException("Repository path must not be null or empty");
     }
 
-    // input must start with '/'
     if (!(input.charAt(0) == '/')) {
-      return null;
+      throw new BadRequestException("Repository path must start with '/'");
     }
 
-    // input must have another '/' after initial '/'
     int i = input.indexOf('/', 1);
     if (i == -1) {
-      return null;
+      throw new BadRequestException("Repository path must have another '/' after initial '/'");
     }
 
-    // pull off repository-name part
     String repo = input.substring(1, i);
-
-    // repository must not be a relative token
     if (".".equals(repo) || "..".equals(repo)) {
-      return null;
+      throw new BadRequestException("Repository path must not contain a relative token");
     }
 
-    // pull off remaining-path part and normalize
-    String path = input.substring(i, input.length());
-    path = URI.create(path).normalize().toString();
+    return repo;
+  }
 
-    // path must not contain any relative tokens
-    if (path.contains("/..")) {
-      return null;
+  private static String validateAndExtractPath(final String input) {
+    String path = input.substring(input.indexOf('/', 1), input.length());
+    path = FilenameUtils.normalize(path, true); //unixSeparator:true is necessary to make this work on Windows.
+    if (path == null) {
+      throw new BadRequestException("Repository path must not contain a relative token");
     }
-
-    return new RepositoryPath(repo, path);
+    return path;
   }
 }

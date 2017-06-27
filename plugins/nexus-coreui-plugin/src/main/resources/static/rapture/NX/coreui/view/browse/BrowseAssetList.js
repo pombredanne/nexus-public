@@ -31,8 +31,10 @@ Ext.define('NX.coreui.view.browse.BrowseAssetList', {
    * @override
    */
   initComponent: function() {
-    Ext.apply(this, {
-      store: 'Asset',
+    var me = this;
+    var store = me.store || 'Asset';
+    Ext.apply(me, {
+      store: store,
 
       // Marker for source of targets to be shown in container assets
       assetContainerSource: true,
@@ -57,6 +59,7 @@ Ext.define('NX.coreui.view.browse.BrowseAssetList', {
           width: 36,
           iconVariant: 'x16',
           iconNamePrefix: 'asset-type-',
+          sortable: false,
           iconName: function(value) {
             var assetType;
 
@@ -77,27 +80,12 @@ Ext.define('NX.coreui.view.browse.BrowseAssetList', {
         }
       ],
 
-      tbar: {
-        xtype: 'nx-actions',
-        items: [
-          '->',
-          {
-            xtype: 'nx-searchbox',
-            itemId: 'filter',
-            emptyText: NX.I18n.get('Grid_Plugin_FilterBox_Empty'),
-            width: 200
-          }
-        ]
-      },
-
-      plugins: {
-        ptype: 'bufferedrenderer',
-        trailingBufferZone: 20,
-        leadingBufferZone: 50
-      }
+      plugins: [
+        {ptype: 'remotegridfilterbox'}
+      ]
     });
 
-    this.callParent();
+    me.callParent();
   }
 
 });

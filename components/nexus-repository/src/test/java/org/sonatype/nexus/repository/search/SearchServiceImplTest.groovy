@@ -15,30 +15,41 @@ package org.sonatype.nexus.repository.search
 import javax.inject.Provider
 
 import org.sonatype.goodies.testsupport.TestSupport
-import org.sonatype.nexus.common.event.EventBus
+import org.sonatype.nexus.common.event.EventManager
+import org.sonatype.nexus.repository.Facet
 import org.sonatype.nexus.repository.Format
 import org.sonatype.nexus.repository.Repository
-import org.sonatype.nexus.repository.manager.RepositoryImpl
+import org.sonatype.nexus.repository.config.Configuration
 import org.sonatype.nexus.repository.manager.RepositoryManager
+import org.sonatype.nexus.repository.manager.internal.RepositoryImpl
+import org.sonatype.nexus.repository.storage.Component;
 import org.sonatype.nexus.repository.types.HostedType
 import org.sonatype.nexus.security.SecurityHelper
 
-import com.google.common.base.Charsets
+import com.google.common.base.Function
+import com.google.common.collect.BiMap
+import com.google.common.collect.HashBiMap
 import org.elasticsearch.action.ListenableActionFuture
 import org.elasticsearch.action.admin.indices.exists.indices.IndicesExistsRequestBuilder
 import org.elasticsearch.action.admin.indices.exists.indices.IndicesExistsResponse
+import org.elasticsearch.action.bulk.BulkProcessor
+import org.elasticsearch.action.index.IndexRequestBuilder
 import org.elasticsearch.client.AdminClient
 import org.elasticsearch.client.Client
 import org.elasticsearch.client.IndicesAdminClient
+import org.elasticsearch.common.settings.Settings
 import org.junit.Before
 import org.junit.Test
 import org.mockito.ArgumentCaptor
-import org.mockito.InjectMocks
 import org.mockito.Mock
 
 import static org.hamcrest.MatcherAssert.assertThat
+import static org.hamcrest.Matchers.arrayWithSize
 import static org.hamcrest.Matchers.contains
-import static org.powermock.api.mockito.PowerMockito.when
+import static org.mockito.Mockito.eq
+import static org.mockito.Mockito.mock
+import static org.mockito.Mockito.when
+import static org.mockito.Mockito.verify
 import static org.sonatype.nexus.common.hash.HashAlgorithm.SHA1
 
 class SearchServiceImplTest
@@ -73,29 +84,38 @@ class SearchServiceImplTest
   SecurityHelper securityHelper
 
   @Mock
+  SearchSubjectHelper searchSubjectHelper
+
+  @Mock
   List<IndexSettingsContributor> indexSettingsContributors
 
   @Mock
-  EventBus eventBus
-  
+  EventManager eventManager
+
+  @Mock
+  BulkProcessor bulkProcessor
+
+  Settings settings = Settings.EMPTY
+
   SearchServiceImpl searchService
 
   @Before
   public void setup() {
-    searchService = new SearchServiceImpl(clientProvider, repositoryManager, securityHelper, indexSettingsContributors,
-        false)
-    when(clientProvider.get()).thenReturn(client);
+    when(clientProvider.get()).thenReturn(client)
     when(client.admin()).thenReturn(adminClient)
     when(adminClient.indices()).thenReturn(indicesAdminClient)
+    when(client.settings()).thenReturn(settings)
+
+    searchService = new SearchServiceImpl(clientProvider, repositoryManager, securityHelper, searchSubjectHelper,
+        indexSettingsContributors, false, 1000, 0, 0)
+    searchService.bulkProcessor = bulkProcessor
   }
 
   @Test
   public void testCreateIndexAlreadyExists() throws Exception {
     ArgumentCaptor<String> varArgs = captureRepoNameArg()
 
-    Repository repository = new RepositoryImpl(eventBus, new HostedType(), new TestFormat('test'))
-    repository.name = 'test'
-    searchService.createIndex(repository)
+    searchService.createIndex(repository('test'))
 
     assertThat(varArgs.getAllValues(), contains(SHA1.function().hashUnencodedChars('test').toString()))
   }
@@ -108,15 +128,87 @@ class SearchServiceImplTest
   public void testCreateIndexRepositoryNameMapping() throws Exception {
     ArgumentCaptor<String> varArgs = captureRepoNameArg()
 
-    Repository repository = new RepositoryImpl(eventBus, new HostedType(), new TestFormat('test'))
-    repository.name = 'UPPERCASE'
-    searchService.createIndex(repository)
+    searchService.createIndex(repository('UPPERCASE'))
 
     assertThat(varArgs.getAllValues(), contains(SHA1.function().hashUnencodedChars('UPPERCASE').toString()))
   }
 
+  /**
+   * Verify successful execution path for {@link SearchServiceImpl#bulkPut(Repository, Iterable, Function, Function)}.
+   */
+  @Test
+  void testBulkPut() {
+    int requestCount = 50
+    BiMap<String, Component> components = HashBiMap.create()
+    for (int i = 0; i < requestCount; i++) {
+      components.put(UUID.randomUUID().toString(), new Component())
+    }
+
+    BiMap<Component, String> inverse = components.inverse()
+    String json = '{ "a": "b" }'
+
+    Repository repository = repository(SearchServiceImpl.TYPE)
+    ArgumentCaptor<String> indexName = captureRepoNameArg()
+    searchService.createIndex(repository)
+
+    components.entrySet().forEach({ entry ->
+      IndexRequestBuilder builder = mock(IndexRequestBuilder.class)
+      when(
+          client.prepareIndex(indexName.capture(), eq(SearchServiceImpl.TYPE), eq(entry.getKey()))
+      ).thenReturn(builder)
+      when(builder.setSource(json)).thenReturn(builder)
+      org.elasticsearch.action.index.IndexRequest request = mock(org.elasticsearch.action.index.IndexRequest.class)
+      when(builder.request()).thenReturn(request)
+    })
+
+    searchService.bulkPut(repository,
+        components.values(),
+        { component -> inverse.get(component) },
+        { component -> json }
+    )
+
+    // Note: can't do a 'verify(bulkProcessor, times(requestCount)).add(any())' here,
+    // because BulkProcessor#add is overloaded, each variant taking a single argument of the same supertype
+    // mockito is unable to resolve the invoked method (fails with 'wanted, but not invoked error')
+    verify(bulkProcessor).flush()
+  }
+
+  @Test
+  void testGetSearchableIndexes() {
+    ArgumentCaptor<String> captureA = captureRepoNameArg()
+    def repositoryA = repository('a')
+    searchService.createIndex(repositoryA)
+    def encodedA = captureA.allValues[0]
+
+    ArgumentCaptor<String> captureB = captureRepoNameArg()
+    def repositoryB = repository('b')
+    searchService.createIndex(repositoryB)
+    def encodedB = captureB.allValues[0]
+
+    when(repositoryManager.browse()).thenReturn([repositoryA, repositoryB])
+    def searchable = searchService.getSearchableIndexes(true, ['a'])
+    assertThat(searchable as List, contains(encodedA))
+    assertThat(searchable, arrayWithSize(1))
+
+    when(repositoryManager.browse()).thenReturn([repositoryA, repositoryB])
+    searchable = searchService.getSearchableIndexes(true, ['a', 'b'])
+    assertThat(searchable as List, contains(encodedA, encodedB))
+    assertThat(searchable, arrayWithSize(2))
+  }
+
+  protected Repository repository(String name) {
+    Repository repository = new RepositoryImpl(eventManager, new HostedType(), new TestFormat('test'))
+    repository.name = name
+    def configuration = new Configuration()
+    configuration.online = true
+    repository.configuration = configuration
+    SearchFacet searchFacet = mock(SearchFacet)
+    repository.attach(searchFacet)
+    return repository
+  }
+
   private ArgumentCaptor<String> captureRepoNameArg() {
-    ArgumentCaptor<String> varArgs = ArgumentCaptor.forClass(String.class);
+    ArgumentCaptor<String> varArgs = ArgumentCaptor.forClass(String.class)
     when(indicesAdminClient.prepareExists(varArgs.capture())).thenReturn(indicesExistsRequestBuilder)
     when(indicesExistsRequestBuilder.execute()).thenReturn(actionFuture)
     when(actionFuture.actionGet()).thenReturn(indicesExistsResponse)

@@ -12,6 +12,7 @@
  */
 package org.sonatype.nexus.orient.entity;
 
+import java.io.IOException;
 import java.lang.reflect.ParameterizedType;
 
 import javax.annotation.Nullable;
@@ -19,17 +20,26 @@ import javax.inject.Inject;
 
 import org.sonatype.goodies.common.ComponentSupport;
 import org.sonatype.nexus.common.entity.Entity;
+import org.sonatype.nexus.common.entity.EntityCreatedEvent;
+import org.sonatype.nexus.common.entity.EntityDeletedEvent;
+import org.sonatype.nexus.common.entity.EntityEvent;
 import org.sonatype.nexus.common.entity.EntityId;
+import org.sonatype.nexus.common.entity.EntityMetadata;
+import org.sonatype.nexus.common.entity.EntityUpdatedEvent;
 import org.sonatype.nexus.orient.RecordIdObfuscator;
+import org.sonatype.nexus.orient.internal.PbeCompression;
 
 import com.google.common.base.Throwables;
 import com.google.common.reflect.TypeToken;
 import com.orientechnologies.orient.core.db.document.ODatabaseDocumentTx;
-import com.orientechnologies.orient.core.hook.ORecordHook.TYPE;
+import com.orientechnologies.orient.core.exception.OSecurityException;
+import com.orientechnologies.orient.core.exception.OStorageException;
 import com.orientechnologies.orient.core.id.ORID;
 import com.orientechnologies.orient.core.metadata.schema.OClass;
 import com.orientechnologies.orient.core.metadata.schema.OSchema;
 import com.orientechnologies.orient.core.record.impl.ODocument;
+import com.orientechnologies.orient.core.storage.OCluster;
+import com.orientechnologies.orient.core.storage.OStorage;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
@@ -43,11 +53,23 @@ import static org.sonatype.nexus.common.entity.EntityHelper.id;
 public abstract class EntityAdapter<T extends Entity>
     extends ComponentSupport
 {
+  /**
+   * @since 3.1
+   */
+  public enum EventKind
+  {
+    CREATE, UPDATE, DELETE
+  }
+
   private final String typeName;
 
   private final Class<T> entityType;
 
   private RecordIdObfuscator recordIdObfuscator;
+
+  private EntityHook entityHook;
+
+  private String dbName;
 
   private OClass schemaType;
 
@@ -69,8 +91,13 @@ public abstract class EntityAdapter<T extends Entity>
   }
 
   @Inject
-  public void installDependencies(final RecordIdObfuscator recordIdObfuscator) {
+  public void enableObfuscation(final RecordIdObfuscator recordIdObfuscator) {
     this.recordIdObfuscator = checkNotNull(recordIdObfuscator);
+  }
+
+  @Inject
+  public void enableEntityHook(final EntityHook entityHook) {
+    this.entityHook = checkNotNull(entityHook);
   }
 
   protected RecordIdObfuscator getRecordIdObfuscator() {
@@ -109,15 +136,17 @@ public abstract class EntityAdapter<T extends Entity>
         initializer.run();
       }
     }
+
+    this.dbName = db.getName();
     this.schemaType = type;
+
+    if (sendEvents() && entityHook != null) {
+      entityHook.enableEvents(this);
+    }
   }
 
   public void register(final ODatabaseDocumentTx db) {
     register(db, null);
-  }
-
-  public boolean isRegistered(final ODatabaseDocumentTx db) {
-    return db.getMetadata().getSchema().existsClass(typeName);
   }
 
   protected void defineType(final ODatabaseDocumentTx db, final OClass type) {
@@ -125,6 +154,35 @@ public abstract class EntityAdapter<T extends Entity>
   }
 
   protected abstract void defineType(final OClass type);
+
+  /**
+   * Enables password-based-encryption for records of the given type.
+   *
+   * Can only be called when creating the schema.
+   *
+   * @since 3.1
+   */
+  protected void enableRecordEncryption(final ODatabaseDocumentTx db, final OClass type) {
+    OStorage storage = db.getStorage();
+    for (int clusterId : type.getClusterIds()) {
+      OCluster cluster = storage.getClusterById(clusterId);
+      try {
+        log.debug("Enabling PBE compression for cluster: {}", cluster.getName());
+        cluster.set(OCluster.ATTRIBUTES.COMPRESSION, PbeCompression.NAME);
+      }
+      catch (IOException e) {
+        throw new RuntimeException(e);
+      }
+      catch (IllegalArgumentException | OStorageException | OSecurityException e) {
+        log.warn("Cannot enable PBE compression for cluster: {}", cluster.getName(), e);
+      }
+    }
+  }
+
+  public String getDbName() {
+    checkState(dbName != null, "Not registered");
+    return dbName;
+  }
 
   public OClass getSchemaType() {
     checkState(schemaType != null, "Not registered");
@@ -160,7 +218,8 @@ public abstract class EntityAdapter<T extends Entity>
       readFields(document, entity);
     }
     catch (Exception e) {
-      throw Throwables.propagate(e);
+      Throwables.throwIfUnchecked(e);
+      throw new RuntimeException(e);
     }
     attachMetadata(entity, document);
 
@@ -180,7 +239,8 @@ public abstract class EntityAdapter<T extends Entity>
       writeFields(document, entity);
     }
     catch (Exception e) {
-      throw Throwables.propagate(e);
+      Throwables.throwIfUnchecked(e);
+      throw new RuntimeException(e);
     }
     attachMetadata(entity, document);
 
@@ -208,8 +268,9 @@ public abstract class EntityAdapter<T extends Entity>
     checkNotNull(db);
     checkNotNull(entity);
 
-    // new entity must not already have metadata
-    checkState(entity.getEntityMetadata() == null);
+    // new entity must either have no metadata or it should be a new record
+    EntityMetadata metadata = entity.getEntityMetadata();
+    checkState(metadata == null || recordIdentity(metadata.getId()).isNew());
 
     ODocument doc = db.newInstance(typeName);
     return writeEntity(doc, entity);
@@ -285,14 +346,15 @@ public abstract class EntityAdapter<T extends Entity>
    * Override this method to customize {@link EntityEvent}s for this adapter.
    */
   @Nullable
-  public EntityEvent newEvent(final ODocument document, final TYPE eventType) {
-    final AttachedEntityMetadata metadata = new AttachedEntityMetadata(this, document);
-    switch (eventType) {
-      case AFTER_CREATE:
+  public EntityEvent newEvent(final ODocument document, final EventKind eventKind)  {
+    EntityMetadata metadata = new AttachedEntityMetadata(this, document);
+
+    switch (eventKind) {
+      case CREATE:
         return new EntityCreatedEvent(metadata);
-      case AFTER_UPDATE:
+      case UPDATE:
         return new EntityUpdatedEvent(metadata);
-      case AFTER_DELETE:
+      case DELETE:
         return new EntityDeletedEvent(metadata);
       default:
         return null;

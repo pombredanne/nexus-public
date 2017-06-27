@@ -20,6 +20,7 @@ import java.io.Reader;
 import java.io.Writer;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.InvocationTargetException;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -61,6 +62,8 @@ import com.softwarementors.extjs.djn.router.dispatcher.Dispatcher;
 import com.softwarementors.extjs.djn.router.processor.poll.PollRequestProcessor;
 import com.softwarementors.extjs.djn.servlet.DirectJNgineServlet;
 import com.softwarementors.extjs.djn.servlet.ssm.SsmDispatcher;
+import org.apache.commons.collections.ListUtils;
+import org.apache.shiro.authz.UnauthenticatedException;
 import org.eclipse.sisu.BeanEntry;
 import org.eclipse.sisu.inject.BeanLocator;
 import org.slf4j.Logger;
@@ -86,6 +89,9 @@ public class ExtDirectServlet
     implements Lifecycle
 {
   private static final Logger log = LoggerFactory.getLogger(ExtDirectServlet.class);
+
+  private static final List<Class<Throwable>> SUPPRESSED_EXCEPTIONS = ListUtils
+      .unmodifiableList(Arrays.asList(UnauthenticatedException.class));
 
   private final ApplicationDirectories directories;
 
@@ -242,9 +248,11 @@ public class ExtDirectServlet
       }
 
       private Response handleException(final RegisteredMethod method, final Throwable e) {
-        // debug logging for sanity
-        log.debug("Failed to invoke action method: {}, java-method: {}",
-            method.getFullName(), method.getFullJavaMethodName(), e);
+        // debug logging for sanity (without stacktrace for suppressed exception)
+        log.debug("Failed to invoke action method: {}, java-method: {}, exception message: {}",
+            method.getFullName(), method.getFullJavaMethodName(), e.getMessage(),
+            isSuppressedException(e) ? null : e);
+
 
         // handle validation message responses which have contents
         if (e instanceof ConstraintViolationException) {
@@ -255,10 +263,17 @@ public class ExtDirectServlet
           }
         }
 
-        // everything else report as an error and log
-        log.error("Failed to invoke action method: {}, java-method: {}",
-            method.getFullName(), method.getFullJavaMethodName(), e);
+        // exception logging for all non-suppressed exceptions
+        if (!isSuppressedException(e)) {
+          log.error("Failed to invoke action method: {}, java-method: {}",
+              method.getFullName(), method.getFullJavaMethodName(), e);
+        }
+
         return asResponse(error(e));
+      }
+
+      private boolean isSuppressedException(final Throwable e) {
+        return SUPPRESSED_EXCEPTIONS.stream().anyMatch(ex -> ex.isInstance(e));
       }
 
       private Response asResponse(final Object result) {

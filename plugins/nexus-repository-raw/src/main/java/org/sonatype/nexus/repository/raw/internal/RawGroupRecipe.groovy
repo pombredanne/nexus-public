@@ -22,7 +22,8 @@ import org.sonatype.nexus.repository.Format
 import org.sonatype.nexus.repository.RecipeSupport
 import org.sonatype.nexus.repository.Repository
 import org.sonatype.nexus.repository.Type
-import org.sonatype.nexus.repository.group.GroupFacetImpl
+import org.sonatype.nexus.repository.attributes.AttributesFacet
+import org.sonatype.nexus.repository.group.GroupFacet
 import org.sonatype.nexus.repository.group.GroupHandler
 import org.sonatype.nexus.repository.http.HttpHandlers
 import org.sonatype.nexus.repository.security.SecurityHandler
@@ -33,6 +34,7 @@ import org.sonatype.nexus.repository.view.handlers.ExceptionHandler
 import org.sonatype.nexus.repository.view.Route
 import org.sonatype.nexus.repository.view.Router
 import org.sonatype.nexus.repository.view.ViewFacet
+import org.sonatype.nexus.repository.view.handlers.HandlerContributor
 import org.sonatype.nexus.repository.view.handlers.TimingHandler
 import org.sonatype.nexus.repository.view.matchers.token.TokenMatcher
 
@@ -58,7 +60,10 @@ class RawGroupRecipe
   Provider<ConfigurableViewFacet> viewFacet
 
   @Inject
-  Provider<GroupFacetImpl> groupFacet
+  Provider<AttributesFacet> attributesFacet
+
+  @Inject
+  Provider<GroupFacet> groupFacet
 
   @Inject
   ExceptionHandler exceptionHandler
@@ -73,6 +78,9 @@ class RawGroupRecipe
   GroupHandler groupHandler
 
   @Inject
+  HandlerContributor handlerContributor
+
+  @Inject
   RawGroupRecipe(@Named(GroupType.NAME) Type type,
                  @Named(RawFormat.NAME) Format format)
   {
@@ -83,6 +91,7 @@ class RawGroupRecipe
   void apply(@Nonnull final Repository repository) throws Exception {
     repository.attach(storageFacet.get())
     repository.attach(securityFacet.get())
+    repository.attach(attributesFacet.get())
     repository.attach(configure(viewFacet.get()))
     repository.attach(groupFacet.get())
   }
@@ -98,6 +107,7 @@ class RawGroupRecipe
         .handler(timingHandler)
         .handler(securityHandler)
         .handler(exceptionHandler)
+        .handler(handlerContributor)
         .handler(groupHandler)
         .create())
 

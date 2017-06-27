@@ -73,6 +73,7 @@ Ext.define('NX.app.Application', {
 
     // grid plugins
     'NX.ext.grid.plugin.FilterBox',
+    'NX.ext.grid.plugin.RemoteFilterBox',
     'NX.ext.grid.plugin.Filtering',
 
     // grid overrides
@@ -80,7 +81,7 @@ Ext.define('NX.app.Application', {
 
     // custom grid columns
     'NX.ext.grid.column.Icon',
-    'NX.ext.grid.column.Link'
+    'NX.ext.grid.column.CopyLink'
   ],
 
   name: 'NX',
@@ -104,6 +105,7 @@ Ext.define('NX.app.Application', {
    * Always active controllers.
    */
   controllers: [
+    'Copy',
     'Logging',
     'State',
     'Bookmarking',
@@ -128,7 +130,7 @@ Ext.define('NX.app.Application', {
       return true;
     },
     defaultActivation: function () {
-      return NX.app.Application.supportedBrowser() && NX.app.Application.licensed();
+      return NX.app.Application.supportedBrowser();
     },
     supportedBrowser: function () {
       return NX.State.isBrowserSupported();
@@ -137,10 +139,14 @@ Ext.define('NX.app.Application', {
       return !NX.app.Application.supportedBrowser();
     },
     licensed: function () {
-      return !NX.State.requiresLicense() || NX.State.isLicenseInstalled();
+      return !NX.State.requiresLicense() || NX.State.isLicenseValid();
     },
     unlicensed: function () {
       return !NX.app.Application.licensed();
+    },
+    licenseExpired: function() {
+      var daysToLicenseExpiry = NX.State.getDaysToLicenseExpiry();
+      return NX.app.Application.licensed() && daysToLicenseExpiry ? daysToLicenseExpiry < 0 : false; 
     },
     debugMode: function () {
       return NX.State.getValue('debug') === true;

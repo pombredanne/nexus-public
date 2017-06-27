@@ -12,14 +12,17 @@
  */
 package org.sonatype.nexus.internal.email;
 
+import javax.annotation.Nullable;
 import javax.inject.Inject;
 import javax.inject.Named;
 import javax.inject.Singleton;
 
+import org.sonatype.nexus.common.entity.EntityEvent;
+import org.sonatype.nexus.common.entity.EntityMetadata;
 import org.sonatype.nexus.email.EmailConfiguration;
 import org.sonatype.nexus.orient.OClassNameBuilder;
-import org.sonatype.nexus.orient.entity.EntityAdapter;
-import org.sonatype.nexus.orient.entity.action.SingletonActions;
+import org.sonatype.nexus.orient.entity.AttachedEntityMetadata;
+import org.sonatype.nexus.orient.entity.SingletonEntityAdapter;
 import org.sonatype.nexus.security.PasswordHelper;
 
 import com.orientechnologies.orient.core.metadata.schema.OClass;
@@ -36,7 +39,7 @@ import static com.google.common.base.Preconditions.checkNotNull;
 @Named
 @Singleton
 public class EmailConfigurationEntityAdapter
-    extends EntityAdapter<EmailConfiguration>
+    extends SingletonEntityAdapter<EmailConfiguration>
 {
   private static final String DB_CLASS = new OClassNameBuilder()
       .type("email")
@@ -140,9 +143,20 @@ public class EmailConfigurationEntityAdapter
     document.field(P_NEXUS_TRUST_STORE_ENABLED, entity.isNexusTrustStoreEnabled());
   }
 
-  //
-  // Actions
-  //
-
-  public final SingletonActions<EmailConfiguration> singleton = new SingletonActions<>(this);
+  @Nullable
+  @Override
+  public EntityEvent newEvent(final ODocument document, final EventKind eventKind) {
+    EntityMetadata metadata = new AttachedEntityMetadata(this, document);
+    log.debug("Emitted {} event with metadata {}", eventKind, metadata);
+    switch (eventKind) {
+      case CREATE:
+        return new EmailConfigurationCreatedEvent(metadata);
+      case UPDATE:
+        return new EmailConfigurationUpdatedEvent(metadata);
+      case DELETE:
+        return new EmailConfigurationDeletedEvent(metadata);
+      default:
+        return null;
+    }
+  }
 }

@@ -20,18 +20,19 @@ import javax.inject.Named;
 import javax.inject.Singleton;
 
 import org.sonatype.nexus.blobstore.api.BlobRef;
+import org.sonatype.nexus.common.entity.EntityEvent;
 import org.sonatype.nexus.common.entity.EntityHelper;
 import org.sonatype.nexus.common.entity.EntityId;
+import org.sonatype.nexus.common.entity.EntityMetadata;
 import org.sonatype.nexus.orient.OClassNameBuilder;
+import org.sonatype.nexus.orient.OIndexBuilder;
 import org.sonatype.nexus.orient.OIndexNameBuilder;
 import org.sonatype.nexus.orient.entity.AttachedEntityId;
 import org.sonatype.nexus.orient.entity.AttachedEntityMetadata;
-import org.sonatype.nexus.orient.entity.EntityEvent;
 
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
 import com.orientechnologies.orient.core.db.document.ODatabaseDocumentTx;
-import com.orientechnologies.orient.core.hook.ORecordHook.TYPE;
 import com.orientechnologies.orient.core.id.ORID;
 import com.orientechnologies.orient.core.metadata.schema.OClass;
 import com.orientechnologies.orient.core.metadata.schema.OClass.INDEX_TYPE;
@@ -83,9 +84,9 @@ public class AssetEntityAdapter
   public static final String P_CONTENT_TYPE = "content_type";
 
   /**
-   * Key of {@link Asset} attribute denoting when it was last accessed.
+   * Key of {@link Asset} attribute denoting when it was last downloaded.
    */
-  public static final String P_LAST_ACCESSED = "last_accessed";
+  public static final String P_LAST_DOWNLOADED = "last_downloaded";
 
   /**
    * Key of {@link Asset} size attribute (if asset has backing content).
@@ -93,6 +94,16 @@ public class AssetEntityAdapter
    * @see StorageTx#attachBlob(Asset, AssetBlob)
    */
   public static final String P_SIZE = "size";
+
+  /**
+   * Key of {@link Asset} attribute indicating when a blob was first attached to this asset.
+   */
+  public static final String P_BLOB_CREATED = "blob_created";
+
+  /**
+   * Key of {@link Asset} attribute indicating when a blob was updated (on creation or attaching a different blob).
+   */
+  public static final String P_BLOB_UPDATED = "blob_updated";
 
   private static final String I_BUCKET_COMPONENT_NAME = new OIndexNameBuilder()
       .type(DB_CLASS)
@@ -105,6 +116,17 @@ public class AssetEntityAdapter
       .type(DB_CLASS)
       .property(P_BUCKET)
       .property(P_NAME)
+      .build();
+
+  public static final String I_COMPONENT = new OIndexNameBuilder()
+      .type(DB_CLASS)
+      .property(P_COMPONENT)
+      .build();
+
+  public static final String I_NAME_CASEINSENSITIVE = new OIndexNameBuilder()
+      .type(DB_CLASS)
+      .property(P_NAME)
+      .caseInsensitive()
       .build();
 
   private final ComponentEntityAdapter componentEntityAdapter;
@@ -127,7 +149,9 @@ public class AssetEntityAdapter
     type.createProperty(P_SIZE, OType.LONG);
     type.createProperty(P_CONTENT_TYPE, OType.STRING);
     type.createProperty(P_BLOB_REF, OType.STRING);
-    type.createProperty(P_LAST_ACCESSED, OType.DATETIME);
+    type.createProperty(P_LAST_DOWNLOADED, OType.DATETIME);
+    type.createProperty(P_BLOB_CREATED, OType.DATETIME);
+    type.createProperty(P_BLOB_UPDATED, OType.DATETIME);
 
     ODocument metadata = db.newInstance()
         .field("ignoreNullValues", false)
@@ -136,6 +160,12 @@ public class AssetEntityAdapter
         new String[]{P_BUCKET, P_COMPONENT, P_NAME}
     );
     type.createIndex(I_BUCKET_NAME, INDEX_TYPE.NOTUNIQUE, P_BUCKET, P_NAME);
+    type.createIndex(I_COMPONENT, INDEX_TYPE.NOTUNIQUE, P_COMPONENT);
+
+    new OIndexBuilder(type, I_NAME_CASEINSENSITIVE, INDEX_TYPE.NOTUNIQUE)
+        .property(P_NAME, OType.STRING)
+        .caseInsensitive()
+        .build(db);
   }
 
   @Override
@@ -152,7 +182,9 @@ public class AssetEntityAdapter
     Long size = document.field(P_SIZE, OType.LONG);
     String contentType = document.field(P_CONTENT_TYPE, OType.STRING);
     String blobRef = document.field(P_BLOB_REF, OType.STRING);
-    Date lastAccessed = document.field(P_LAST_ACCESSED, OType.DATETIME);
+    Date lastDownloaded = document.field(P_LAST_DOWNLOADED, OType.DATETIME);
+    Date blobCreated = document.field(P_BLOB_CREATED, OType.DATETIME);
+    Date blobUpdated = document.field(P_BLOB_UPDATED, OType.DATETIME);
 
     if (componentId != null) {
       entity.componentId(new AttachedEntityId(componentEntityAdapter, componentId));
@@ -163,8 +195,14 @@ public class AssetEntityAdapter
     if (blobRef != null) {
       entity.blobRef(BlobRef.parse(blobRef));
     }
-    if (lastAccessed != null) {
-      entity.lastAccessed(new DateTime(lastAccessed));
+    if (lastDownloaded != null) {
+      entity.lastDownloaded(new DateTime(lastDownloaded));
+    }
+    if (blobCreated != null) {
+      entity.blobCreated(new DateTime(blobCreated));
+    }
+    if (blobUpdated != null) {
+      entity.blobUpdated(new DateTime(blobUpdated));
     }
   }
 
@@ -179,8 +217,12 @@ public class AssetEntityAdapter
     document.field(P_CONTENT_TYPE, entity.contentType());
     BlobRef blobRef = entity.blobRef();
     document.field(P_BLOB_REF, blobRef != null ? blobRef.toString() : null);
-    DateTime lastAccessed = entity.lastAccessed();
-    document.field(P_LAST_ACCESSED, lastAccessed != null ? lastAccessed.toDate() : null);
+    DateTime lastDownloaded = entity.lastDownloaded();
+    document.field(P_LAST_DOWNLOADED, lastDownloaded != null ? lastDownloaded.toDate() : null);
+    DateTime blobCreated = entity.blobCreated();
+    document.field(P_BLOB_CREATED, blobCreated != null ? blobCreated.toDate() : null);
+    DateTime blobUpdated = entity.blobUpdated();
+    document.field(P_BLOB_UPDATED, blobUpdated != null ? blobUpdated.toDate() : null);
   }
 
   Asset findByProperty(final ODatabaseDocumentTx db,
@@ -210,7 +252,7 @@ public class AssetEntityAdapter
     checkNotNull(component);
     checkState(EntityHelper.hasMetadata(component));
 
-    Map<String, Object> parameters = ImmutableMap.<String, Object>of(
+    Map<String, Object> parameters = ImmutableMap.of(
         "bucket", bucketEntityAdapter.recordIdentity(component.bucketId()),
         "component", componentEntityAdapter.recordIdentity(component)
     );
@@ -219,7 +261,7 @@ public class AssetEntityAdapter
         DB_CLASS, P_BUCKET, P_COMPONENT
     );
     Iterable<ODocument> docs = db.command(new OCommandSQL(query)).execute(parameters);
-    return readEntities(docs);
+    return transform(docs);
   }
 
   @Override
@@ -228,19 +270,20 @@ public class AssetEntityAdapter
   }
 
   @Override
-  public EntityEvent newEvent(ODocument document, TYPE eventType) {
-    final AttachedEntityMetadata metadata = new AttachedEntityMetadata(this, document);
-    final String repositoryName = ((ODocument) document.field(P_BUCKET)).field(P_REPOSITORY_NAME);
+  public EntityEvent newEvent(final ODocument document, final EventKind eventKind) {
+    EntityMetadata metadata = new AttachedEntityMetadata(this, document);
 
-    final ORID rid = document.field(P_COMPONENT, ORID.class);
-    final EntityId componentId = rid != null ? new AttachedEntityId(componentEntityAdapter, rid) : null;
+    String repositoryName = ((ODocument) document.field(P_BUCKET)).field(P_REPOSITORY_NAME);
 
-    switch (eventType) {
-      case AFTER_CREATE:
+    ORID rid = document.field(P_COMPONENT, ORID.class);
+    EntityId componentId = rid != null ? new AttachedEntityId(componentEntityAdapter, rid) : null;
+
+    switch (eventKind) {
+      case CREATE:
         return new AssetCreatedEvent(metadata, repositoryName, componentId);
-      case AFTER_UPDATE:
+      case UPDATE:
         return new AssetUpdatedEvent(metadata, repositoryName, componentId);
-      case AFTER_DELETE:
+      case DELETE:
         return new AssetDeletedEvent(metadata, repositoryName, componentId);
       default:
         return null;

@@ -21,10 +21,13 @@ if not "%KARAF_TITLE%" == "" (
 
 rem Check/Set up some easily accessible MIN/MAX params for JVM mem usage
 if "%JAVA_MIN_MEM%" == "" (
-    set JAVA_MIN_MEM=128M
+    set JAVA_MIN_MEM=1200M
 )
 if "%JAVA_MAX_MEM%" == "" (
-    set JAVA_MAX_MEM=512M
+    set JAVA_MAX_MEM=1200M
+)
+if "%DIRECT_MAX_MEM%" == "" (
+    set DIRECT_MAX_MEM=2G
 )
 
 goto BEGIN
@@ -63,7 +66,7 @@ if not "%KARAF_DATA%" == "" (
     )
 )
 if "%KARAF_DATA%" == "" (
-    set "KARAF_DATA=%KARAF_BASE%\data"
+    set "KARAF_DATA=%KARAF_BASE%\..\sonatype-work\nexus3"
 )
 
 if not "%KARAF_ETC%" == "" (
@@ -73,7 +76,7 @@ if not "%KARAF_ETC%" == "" (
     )
 )
 if "%KARAF_ETC%" == "" (
-    set "KARAF_ETC=%KARAF_BASE%\etc"
+    set "KARAF_ETC=%KARAF_BASE%\etc\karaf"
 )
 
 set LOCAL_CLASSPATH=%CLASSPATH%
@@ -201,8 +204,12 @@ if not exist "%JAVA_HOME%\bin\server\jvm.dll" (
         set JAVA_MODE=-client
     )
 )
-rem SONATYPE: removed -Dcom.sun.management.jmxremote
-set DEFAULT_JAVA_OPTS=%JAVA_MODE% -Xms%JAVA_MIN_MEM% -Xmx%JAVA_MAX_MEM% -Dderby.system.home="%KARAF_DATA%\derby" -Dderby.storage.fileSyncTransactionLog=true  -XX:+UnlockDiagnosticVMOptions -XX:+UnsyncloadClass
+
+rem SONATYPE: preferred IPv4 by default
+if "%KARAF_OPTS%" == "" set KARAF_OPTS=-Djava.net.preferIPv4Stack=true
+
+rem SONATYPE: removed -Dcom.sun.management.jmxremote and unused derby properties
+set DEFAULT_JAVA_OPTS=%JAVA_MODE% -Xms%JAVA_MIN_MEM% -Xmx%JAVA_MAX_MEM% -XX:MaxDirectMemorySize=%DIRECT_MAX_MEM% -XX:+UnlockDiagnosticVMOptions -XX:+UnsyncloadClass
 
 rem SONATYPE: removed -XX:PermSize and -XX:MaxPermSize
 
@@ -261,6 +268,7 @@ if "%KARAF_PROFILER%" == "" goto :RUN
     if "%1" == "status" goto :EXECUTE_STATUS
     if "%1" == "run" goto :EXECUTE_CONSOLE
     if "%1" == "console" goto :EXECUTE_CONSOLE
+    if "%1" == "start" goto :EXECUTE_SERVER
     if "%1" == "server" goto :EXECUTE_SERVER
     if "%1" == "client" goto :EXECUTE_CLIENT
     if "%1" == "clean" goto :EXECUTE_CLEAN
@@ -309,7 +317,7 @@ if "%KARAF_PROFILER%" == "" goto :RUN
     rem SONATYPE: removed -Djavax.management.builder.initial
     rem SONATYPE: removed -Djava.endorsed.dirs="%JAVA_HOME%\jre\lib\endorsed;%JAVA_HOME%\lib\endorsed;%KARAF_HOME%\lib\endorsed"
     rem SONATYPE: removed -Djava.ext.dirs="%JAVA_HOME%\jre\lib\ext;%JAVA_HOME%\lib\ext;%KARAF_HOME%\lib\ext"
-    "%JAVA%" %JAVA_OPTS% %OPTS% -classpath "%CLASSPATH%" -Dkaraf.instances="%KARAF_DATA%\instances" -Dkaraf.home="%KARAF_HOME%" -Dkaraf.base="%KARAF_BASE%" -Dkaraf.etc="%KARAF_ETC%" -Djava.io.tmpdir="%KARAF_DATA%\tmp" -Dkaraf.data="%KARAF_DATA%" -Djava.util.logging.config.file="%KARAF_BASE%\etc\java.util.logging.properties" %KARAF_OPTS% %MAIN% %ARGS%
+    "%JAVA%" %JAVA_OPTS% %OPTS% -classpath "%CLASSPATH%" -Dkaraf.instances="%KARAF_DATA%\instances" -Dkaraf.home="%KARAF_HOME%" -Dkaraf.base="%KARAF_BASE%" -Dkaraf.etc="%KARAF_ETC%" -Djava.io.tmpdir="%KARAF_DATA%\tmp" -Dkaraf.data="%KARAF_DATA%" -Djava.util.logging.config.file="%KARAF_ETC%\java.util.logging.properties" %KARAF_OPTS% %MAIN% %ARGS%
 
 rem # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 

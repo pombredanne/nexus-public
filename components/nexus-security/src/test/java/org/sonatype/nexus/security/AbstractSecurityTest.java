@@ -22,11 +22,15 @@ import javax.servlet.ServletContext;
 
 import org.sonatype.goodies.testsupport.TestUtil;
 import org.sonatype.nexus.common.app.ApplicationDirectories;
+import org.sonatype.nexus.common.event.EventManager;
+import org.sonatype.nexus.common.node.NodeAccess;
+import org.sonatype.nexus.security.anonymous.AnonymousManager;
 import org.sonatype.nexus.security.config.PreconfiguredSecurityConfigurationSource;
 import org.sonatype.nexus.security.config.SecurityConfiguration;
 import org.sonatype.nexus.security.config.SecurityConfigurationSource;
 import org.sonatype.nexus.security.realm.RealmConfiguration;
 import org.sonatype.nexus.security.user.UserManager;
+import org.sonatype.nexus.testcommon.event.SimpleEventManager;
 
 import com.google.inject.AbstractModule;
 import com.google.inject.Guice;
@@ -82,6 +86,9 @@ public abstract class AbstractSecurityTest
         bind(RealmConfiguration.class).annotatedWith(Names.named("initial")).toInstance(realmConfiguration);
 
         bind(ApplicationDirectories.class).toInstance(mock(ApplicationDirectories.class));
+        bind(NodeAccess.class).toInstance(mock(NodeAccess.class));
+        bind(AnonymousManager.class).toInstance(mock(AnonymousManager.class));
+        bind(EventManager.class).toInstance(new SimpleEventManager());
 
         requestInjection(AbstractSecurityTest.this);
       }

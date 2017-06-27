@@ -12,10 +12,12 @@
  */
 package org.sonatype.nexus.security.internal;
 
+import java.util.ArrayDeque;
 import java.util.Collection;
-import java.util.LinkedList;
+import java.util.Deque;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
 
 import javax.annotation.Nullable;
@@ -24,8 +26,7 @@ import javax.inject.Named;
 import javax.inject.Singleton;
 
 import org.sonatype.goodies.common.ComponentSupport;
-import org.sonatype.nexus.common.event.EventBus;
-import org.sonatype.nexus.security.SecurityConfigurationChanged;
+import org.sonatype.nexus.common.event.EventManager;
 import org.sonatype.nexus.security.authz.AuthorizationConfigurationChanged;
 import org.sonatype.nexus.security.config.CPrivilege;
 import org.sonatype.nexus.security.config.CRole;
@@ -34,9 +35,8 @@ import org.sonatype.nexus.security.privilege.NoSuchPrivilegeException;
 import org.sonatype.nexus.security.privilege.PrivilegeDescriptor;
 import org.sonatype.nexus.security.role.NoSuchRoleException;
 
-import com.google.common.collect.Lists;
-import com.google.common.collect.MapMaker;
-import com.google.common.collect.Sets;
+import com.google.common.cache.Cache;
+import com.google.common.cache.CacheBuilder;
 import com.google.common.eventbus.AllowConcurrentEvents;
 import com.google.common.eventbus.Subscribe;
 import org.apache.shiro.authz.Permission;
@@ -60,29 +60,37 @@ public class RolePermissionResolverImpl
   /**
    * Privilege-id to permission cache.
    */
-  private final Map<String,Permission> permissionsCache = new MapMaker().weakValues().makeMap();
+  private final Cache<String,Permission> permissionsCache = CacheBuilder.newBuilder().softValues().build();
 
   /**
    * Role-id to role permissions cache.
    */
-  private final Map<String, Collection<Permission>> rolePermissionsCache = new MapMaker().weakValues().makeMap();
+  private final Cache<String, Collection<Permission>> rolePermissionsCache = CacheBuilder.newBuilder().softValues().build();
+
+  /**
+   * role not found cache.
+   */
+  private final Cache<String,String> roleNotFoundCache;
 
   @Inject
   public RolePermissionResolverImpl(final SecurityConfigurationManager configuration,
                                     final List<PrivilegeDescriptor> privilegeDescriptors,
-                                    final EventBus eventBus)
+                                    final EventManager eventManager,
+                                    @Named("${security.roleNotFoundCacheSize:-100000}") final int roleNotFoundCacheSize)
   {
     this.configuration = checkNotNull(configuration);
     this.privilegeDescriptors = checkNotNull(privilegeDescriptors);
-    eventBus.register(this);
+    this.roleNotFoundCache = CacheBuilder.newBuilder().maximumSize(roleNotFoundCacheSize).build();
+    eventManager.register(this);
   }
 
   /**
    * Invalidate caches.
    */
   private void invalidate() {
-    permissionsCache.clear();
-    rolePermissionsCache.clear();
+    permissionsCache.invalidateAll();
+    rolePermissionsCache.invalidateAll();
+    roleNotFoundCache.invalidateAll();
     log.trace("Cache invalidated");
   }
 
@@ -94,7 +102,7 @@ public class RolePermissionResolverImpl
 
   @AllowConcurrentEvents
   @Subscribe
-  public void on(final SecurityConfigurationChanged event) {
+  public void on(final SecurityContributionChangedEvent event) {
     invalidate();
   }
 
@@ -102,9 +110,15 @@ public class RolePermissionResolverImpl
   public Collection<Permission> resolvePermissionsInRole(final String roleString) {
     checkNotNull(roleString);
 
-    final Set<Permission> permissions = Sets.newLinkedHashSet();
-    final LinkedList<String> rolesToProcess = Lists.newLinkedList();
-    final Set<String> processedRoleIds = Sets.newLinkedHashSet();
+    // check memory-sensitive cache; use cached value as long as config is not dirty
+    Collection<Permission> cachedPermissions = rolePermissionsCache.getIfPresent(roleString);
+    if (cachedPermissions != null) {
+      return cachedPermissions;
+    }
+
+    final Set<Permission> permissions = new LinkedHashSet<>();
+    final Deque<String> rolesToProcess = new ArrayDeque<>();
+    final Set<String> processedRoleIds = new HashSet<>();
 
     // initial role
     rolesToProcess.add(roleString);
@@ -112,15 +126,21 @@ public class RolePermissionResolverImpl
     while (!rolesToProcess.isEmpty()) {
       final String roleId = rolesToProcess.removeFirst();
       if (processedRoleIds.add(roleId)) {
-        try {
-          final CRole role = configuration.readRole(roleId);
 
-          // check memory-sensitive cache (after readRole to allow for the dirty check)
-          final Collection<Permission> cachedPermissions = rolePermissionsCache.get(roleId);
+        if (roleNotFoundCache.getIfPresent(roleId) != null) {
+          log.trace("Role {} found in NFC, role check skipped", roleId);
+          continue; // use cached results
+        }
+
+        try {
+          // try to re-use results when resolving the role tree
+          cachedPermissions = rolePermissionsCache.getIfPresent(roleId);
           if (cachedPermissions != null) {
             permissions.addAll(cachedPermissions);
             continue; // use cached results
           }
+
+          final CRole role = configuration.readRole(roleId);
 
           // process the roles this role has recursively
           rolesToProcess.addAll(role.getRoles());
@@ -135,6 +155,7 @@ public class RolePermissionResolverImpl
         }
         catch (NoSuchRoleException e) {
           log.trace("Ignoring missing role: {}", roleId, e);
+          roleNotFoundCache.put(roleId, "");
         }
       }
     }
@@ -169,7 +190,7 @@ public class RolePermissionResolverImpl
   private Permission permission(final String privilegeId) {
     assert privilegeId != null;
 
-    Permission permission = permissionsCache.get(privilegeId);
+    Permission permission = permissionsCache.getIfPresent(privilegeId);
     if (permission == null) {
       try {
         CPrivilege privilege = configuration.readPrivilege(privilegeId);

@@ -16,7 +16,7 @@ import javax.annotation.Nullable;
 
 import org.sonatype.nexus.common.entity.EntityId;
 import org.sonatype.nexus.common.entity.EntityMetadata;
-import org.sonatype.nexus.orient.entity.EntityUpdatedEvent;
+import org.sonatype.nexus.common.entity.EntityUpdatedEvent;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 
@@ -33,7 +33,9 @@ public class AssetUpdatedEvent
 
   private final EntityId componentId;
 
-  public AssetUpdatedEvent(final EntityMetadata metadata, final String repositoryName, final EntityId componentId) {
+  public AssetUpdatedEvent(final EntityMetadata metadata, final String repositoryName,
+      @Nullable final EntityId componentId)
+  {
     super(metadata);
     this.repositoryName = checkNotNull(repositoryName);
     this.componentId = componentId;

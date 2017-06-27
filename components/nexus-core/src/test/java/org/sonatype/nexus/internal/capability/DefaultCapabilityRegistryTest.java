@@ -14,6 +14,7 @@ package org.sonatype.nexus.internal.capability;
 
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Iterator;
 import java.util.Map;
 import java.util.Random;
 
@@ -32,8 +33,7 @@ import org.sonatype.nexus.capability.CapabilityIdentity;
 import org.sonatype.nexus.capability.CapabilityNotFoundException;
 import org.sonatype.nexus.capability.CapabilityReference;
 import org.sonatype.nexus.capability.CapabilityType;
-import org.sonatype.nexus.common.event.EventBus;
-import org.sonatype.nexus.crypto.internal.CryptoHelperImpl;
+import org.sonatype.nexus.common.event.EventManager;
 import org.sonatype.nexus.formfields.Encrypted;
 import org.sonatype.nexus.formfields.FormField;
 import org.sonatype.nexus.formfields.PasswordFormField;
@@ -61,6 +61,7 @@ import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.not;
 import static org.hamcrest.Matchers.notNullValue;
 import static org.hamcrest.Matchers.nullValue;
+import static org.mockito.Matchers.anyString;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -86,7 +87,7 @@ public class DefaultCapabilityRegistryTest
   public ExpectedException thrown = ExpectedException.none();
 
   @Mock
-  private EventBus eventBus;
+  private EventManager eventManager;
 
   @Mock
   private CapabilityStorage capabilityStorage;
@@ -98,10 +99,15 @@ public class DefaultCapabilityRegistryTest
 
   private ArgumentCaptor<CapabilityEvent> rec;
 
+  @Mock
   private PasswordHelper passwordHelper;
 
   @Before
   public final void setUpCapabilityRegistry() throws Exception {
+    when(passwordHelper.encrypt(anyString())).thenAnswer(invoc -> "encrypted:" + invoc.getArguments()[0]);
+    when(passwordHelper.decrypt(anyString()))
+        .thenAnswer(invoc -> invoc.getArguments()[0].toString().startsWith("encrypted:")
+            ? invoc.getArguments()[0].toString().substring(10) : invoc.getArguments()[0]);
     final CapabilityFactory factory = mock(CapabilityFactory.class);
     when(factory.create()).thenAnswer(new Answer<Capability>()
     {
@@ -146,10 +152,10 @@ public class DefaultCapabilityRegistryTest
         capabilityFactoryRegistry,
 
         capabilityDescriptorRegistry,
-        eventBus,
+        eventManager,
         achf,
         vchf,
-        passwordHelper = new PasswordHelper(new CryptoHelperImpl()),
+        passwordHelper,
         validatorProvider
     );
 
@@ -168,7 +174,7 @@ public class DefaultCapabilityRegistryTest
     final CapabilityReference reference = underTest.add(CAPABILITY_TYPE, true, null, null);
     assertThat(reference, is(not(nullValue())));
 
-    verify(eventBus, atLeastOnce()).post(rec.capture());
+    verify(eventManager, atLeastOnce()).post(rec.capture());
     assertThat(rec.getValue(), is(instanceOf(CapabilityEvent.Created.class)));
     assertThat(rec.getValue().getReference(), is(equalTo(reference)));
   }
@@ -187,7 +193,7 @@ public class DefaultCapabilityRegistryTest
 
     assertThat(reference1, is(equalTo(reference)));
 
-    verify(eventBus, atLeastOnce()).post(rec.capture());
+    verify(eventManager, atLeastOnce()).post(rec.capture());
     assertThat(rec.getAllValues().get(0), is(instanceOf(CapabilityEvent.Created.class)));
     assertThat(rec.getAllValues().get(0).getReference(), is(equalTo(reference1)));
     assertThat(rec.getAllValues().get(1), is(instanceOf(CapabilityEvent.AfterRemove.class)));
@@ -414,8 +420,7 @@ public class DefaultCapabilityRegistryTest
     CapabilityStorageItem item = csiRec.getValue();
     assertThat(item, is(notNullValue()));
     String fooValue = item.getProperties().get("foo");
-    assertThat(fooValue, not(is("bar")));
-    assertThat(passwordHelper.decrypt(fooValue), is("bar"));
+    assertThat(fooValue, is("encrypted:bar"));
   }
 
   /**
@@ -426,7 +431,7 @@ public class DefaultCapabilityRegistryTest
       throws Exception
   {
     Map<String, String> properties = Maps.newHashMap();
-    properties.put("foo", passwordHelper.encrypt("bar"));
+    properties.put("foo", "encrypted:bar");
 
     final CapabilityStorageItem item = new CapabilityStorageItem(
         0, CAPABILITY_TYPE.toString(), true, null, properties
@@ -444,10 +449,30 @@ public class DefaultCapabilityRegistryTest
 
     ArgumentCaptor<Object> ebRec = ArgumentCaptor.forClass(Object.class);
 
-    verify(eventBus, atLeastOnce()).post(ebRec.capture());
+    verify(eventManager, atLeastOnce()).post(ebRec.capture());
     assertThat(
         ((CapabilityEvent) ebRec.getAllValues().get(0)).getReference().context().properties().get("foo"), is("bar")
     );
   }
 
+  /**
+   * Confirm thread safety for concurrent calls to {@link DefaultCapabilityRegistry#getAll()} and
+   * {@link DefaultCapabilityRegistry#add(CapabilityType, boolean, String, Map)}.
+   *
+   * This test would fail with a {@link java.util.ConcurrentModificationException} unless
+   * {@link DefaultCapabilityRegistry#getAll()} returns a copy of the internal references values.
+   */
+  @Test
+  public void getAllReturnNotAffectedByConcurrentAdd() {
+    // guarantee we have at least 2 instances in the DefaultCapabilityRegistry under test
+    underTest.add(CAPABILITY_TYPE, true, "note1", null);
+    underTest.add(CAPABILITY_TYPE, true, "note2", null);
+
+    Collection<DefaultCapabilityReference> references = underTest.getAll();
+    Iterator<DefaultCapabilityReference> iterator = references.iterator();
+
+    iterator.next();
+    underTest.add(CAPABILITY_TYPE, true, "note3", null);
+    iterator.next();
+  }
 }

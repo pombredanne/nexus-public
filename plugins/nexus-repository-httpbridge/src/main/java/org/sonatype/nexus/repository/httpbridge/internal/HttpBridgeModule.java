@@ -18,8 +18,8 @@ import org.sonatype.nexus.common.property.SystemPropertiesHelper;
 import org.sonatype.nexus.security.FilterChainModule;
 import org.sonatype.nexus.security.SecurityFilter;
 import org.sonatype.nexus.security.anonymous.AnonymousFilter;
+import org.sonatype.nexus.security.authc.NexusAuthenticationFilter;
 import org.sonatype.nexus.security.authc.apikey.ApiKeyAuthenticationFilter;
-import org.sonatype.nexus.security.authc.NexusBasicHttpAuthenticationFilter;
 
 import com.google.inject.AbstractModule;
 import com.google.inject.servlet.ServletModule;
@@ -46,14 +46,23 @@ public class HttpBridgeModule
       protected void configureServlets() {
         bind(ViewServlet.class);
         serve(MOUNT_POINT + "/*").with(ViewServlet.class);
-        filter(MOUNT_POINT + "/*").through(SecurityFilter.class);
+        bindViewFiltersFor(MOUNT_POINT + "/*");
 
         if (SUPPORT_LEGACY_CONTENT) {
           // this technically makes non-group repositories visible under /content/groups,
           // but this is acceptable since their IDs are unique and it keeps things simple
           serve("/content/groups/*", "/content/repositories/*").with(ViewServlet.class);
-          filter("/content/groups/*", "/content/repositories/*").through(SecurityFilter.class);
+          bindViewFiltersFor("/content/groups/*", "/content/repositories/*");
         }
+      }
+
+      /**
+       * Helper to make sure view-related filters are bound in the correct order.
+       */
+      private void bindViewFiltersFor(final String urlPattern, final String... morePatterns) {
+        FilterKeyBindingBuilder filter = filter(urlPattern, morePatterns);
+        filter.through(ExhaustRequestFilter.class);
+        filter.through(SecurityFilter.class);
       }
     });
 
@@ -62,13 +71,13 @@ public class HttpBridgeModule
       @Override
       protected void configure() {
         addFilterChain(MOUNT_POINT + "/**",
-            NexusBasicHttpAuthenticationFilter.NAME,
+            NexusAuthenticationFilter.NAME,
             ApiKeyAuthenticationFilter.NAME,
             AnonymousFilter.NAME);
 
         if (SUPPORT_LEGACY_CONTENT) {
           addFilterChain("/content/**",
-              NexusBasicHttpAuthenticationFilter.NAME,
+              NexusAuthenticationFilter.NAME,
               ApiKeyAuthenticationFilter.NAME,
               AnonymousFilter.NAME);
         }

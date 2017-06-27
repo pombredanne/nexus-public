@@ -16,9 +16,12 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 
+import javax.annotation.Nullable;
+
 import org.sonatype.goodies.common.ComponentSupport;
 import org.sonatype.nexus.repository.Repository;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.collect.Lists;
 
 import static com.google.common.base.Preconditions.checkNotNull;
@@ -36,15 +39,17 @@ public class Router
 
   private final DefaultRoute defaultRoute;
 
+  public static final String LOCAL_ATTRIBUTE_PREFIX = "local.attribute.";
+
   public Router(final List<Route> routes, final DefaultRoute defaultRoute) {
     this.routes = checkNotNull(routes, "Missing routes");
     this.defaultRoute = checkNotNull(defaultRoute, "Missing default route");
   }
 
   /**
-   * Dispatch request to matching route.
+   * Dispatch request to matching route, if supplied will pull attributes from the existingContext.
    */
-  public Response dispatch(final Repository repository, final Request request)
+  public Response dispatch(final Repository repository, final Request request, @Nullable final Context existingContext)
       throws Exception
   {
     checkNotNull(repository);
@@ -53,11 +58,27 @@ public class Router
     logRequest(request);
 
     // Find route and start context
-    Context context = new Context(repository, request);
+    Context context = maybeCopyContextAttributes(repository, request, existingContext);
     Route route = findRoute(context);
     Response response = context.start(route);
     logResponse(response);
     return response;
+  }
+
+  @VisibleForTesting
+  Context maybeCopyContextAttributes(final Repository repository,
+                                     final Request request,
+                                     final Context existingContext)
+  {
+    Context context = new Context(repository, request);
+
+    if (existingContext != null) {
+      existingContext.getAttributes().keys().stream()
+          .filter(key -> !key.startsWith(LOCAL_ATTRIBUTE_PREFIX))
+          .forEach(key -> context.getAttributes().set(key, existingContext.getAttributes().get(key)));
+    }
+
+    return context;
   }
 
   /**

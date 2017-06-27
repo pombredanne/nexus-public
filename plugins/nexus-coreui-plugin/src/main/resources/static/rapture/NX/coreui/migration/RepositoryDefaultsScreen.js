@@ -28,10 +28,9 @@ Ext.define('NX.coreui.migration.RepositoryDefaultsScreen', {
     var me = this;
 
     Ext.apply(me, {
-      title: 'Repository Defaults',
+      title: NX.I18n.render(me, 'Title'),
 
-      description: '<p>Configure the default settings used for repository migration.<br/>' +
-      'Per-repository settings may be customized when selecting repositories to migrate.</p>',
+      description: NX.I18n.render(me, 'Description'),
 
       fields: [
         {
@@ -68,5 +67,15 @@ Ext.define('NX.coreui.migration.RepositoryDefaultsScreen', {
     });
 
     me.callParent();
+    me.down('form').settingsForm = true;
+  },
+
+  /**
+   * Returns the state of the screen form
+   *
+   * @return {boolean}
+   */
+  isDirty: function() {
+    return this.down('form').isDirty();
   }
 });

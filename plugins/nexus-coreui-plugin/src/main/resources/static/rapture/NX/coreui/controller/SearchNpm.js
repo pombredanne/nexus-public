@@ -35,23 +35,8 @@ Ext.define('NX.coreui.controller.SearchNpm', {
         id: 'group',
         group: NX.I18n.get('SearchNpm_Group'),
         config: {
+          format: 'npm',
           fieldLabel: NX.I18n.get('SearchNpm_Scope_FieldLabel'),
-          width: 250
-        }
-      },
-      {
-        id: 'name',
-        group: NX.I18n.get('SearchNpm_Group'),
-        config: {
-          fieldLabel: NX.I18n.get('SearchNpm_Name_FieldLabel'),
-          width: 250
-        }
-      },
-      {
-        id: 'version',
-        group: NX.I18n.get('SearchNpm_Group'),
-        config: {
-          fieldLabel: NX.I18n.get('SearchNpm_Version_FieldLabel'),
           width: 250
         }
       }
@@ -66,7 +51,7 @@ Ext.define('NX.coreui.controller.SearchNpm', {
       criterias: [
         { id: 'format', value: 'npm', hidden: true },
         { id: 'group' },
-        { id: 'name' },
+        { id: 'name.raw' },
         { id: 'version' }
       ]
     }, me);

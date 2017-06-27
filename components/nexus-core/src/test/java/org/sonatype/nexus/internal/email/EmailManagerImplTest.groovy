@@ -15,14 +15,15 @@ package org.sonatype.nexus.internal.email
 import javax.inject.Provider
 import javax.net.ssl.SSLContext
 
-import org.sonatype.nexus.common.event.EventBus
+import org.sonatype.nexus.common.event.EventManager
 import org.sonatype.nexus.email.EmailConfiguration
-import org.sonatype.nexus.email.EmailConfigurationStore
+import org.sonatype.nexus.email.EmailConfigurationChangedEvent
 import org.sonatype.nexus.ssl.TrustStore
 
 import org.apache.commons.mail.Email
 import org.apache.commons.mail.SimpleEmail
 import spock.lang.Specification
+import spock.lang.Unroll
 
 /**
  * Tests for {@link EmailManagerImpl}.
@@ -34,7 +35,7 @@ class EmailManagerImplTest
     given: 'A configured EmailManagerImpl instance'
       TrustStore trustStore = Mock(TrustStore)
       trustStore.getSSLContext() >> SSLContext.getDefault()
-      EmailManagerImpl impl = new EmailManagerImpl(Mock(EventBus), Mock(EmailConfigurationStore), trustStore, Mock(Provider))
+      EmailManagerImpl impl = new EmailManagerImpl(Mock(EventManager), Mock(EmailConfigurationStore), trustStore, Mock(Provider))
     when: 'the specified email configuration is applied to the email instance'
       Email email = impl.apply(
           new EmailConfiguration(
@@ -61,5 +62,61 @@ class EmailManagerImplTest
       false           | false            | true         | false               | false         | true
       false           | false            | false        | true                | false         | false
       false           | false            | false        | true                | true          | false
+  }
+
+  /* Related to NEXUS-10021: postfix doesn't like empty
+   * username/password credentials when authentication is turned on.
+   * Make sure we pass nulls.
+   */
+  @Unroll
+  def 'Configures emails credentials correctly for username #username and password #password.'() {
+    given: 'A configured EmailManagerImpl instance'
+      EmailManagerImpl impl = new EmailManagerImpl(Mock(EventManager), Mock(EmailConfigurationStore), Mock(TrustStore), Mock(Provider))
+    when: 'the specified email configuration is applied to the email instance'
+      Email email = impl.apply(
+          new EmailConfiguration(
+              host: 'example.com',
+              port: 25,
+              fromAddress: 'sender@example.com',
+              username: username,
+              password: password),
+          new SimpleEmail())
+    then: 'the email will be configured accordingly'
+      email.authenticator?.passwordAuthentication?.userName == expectedUsername
+      email.authenticator?.passwordAuthentication?.password == expectedPassword
+    where:
+      username | password | expectedUsername | expectedPassword
+      'user'   | 'pwd'    | 'user'           | 'pwd'
+      'user'   | ''       | 'user'           | ''
+      ''       | 'pwd'    | ''               | 'pwd'
+      ''       | ''       | null             | null
+      null     | null     | null             | null
+  }
+
+  def 'onStoreChanged only posts a changed event for remote events'() {
+    given: 'A configured EmailManagerImpl instance'
+      def eventManager = Mock(EventManager)
+      def emailConfigurationStore = Mock(EmailConfigurationStore)
+      emailConfigurationStore.load() >> Mock(EmailConfiguration)
+      EmailManagerImpl impl = new EmailManagerImpl(eventManager, emailConfigurationStore, Mock(TrustStore), Mock(Provider))
+
+    when: 'a local event is received'
+      def localEvent = Mock(EmailConfigurationEvent)
+      localEvent.isLocal() >> true
+      impl.onStoreChanged(localEvent)
+
+    then: 'the event is not posted'
+      0 * eventManager.post(_ as EmailConfigurationChangedEvent)
+
+    when: 'a remote event is received'
+      def remoteEvent = Mock(EmailConfigurationEvent)
+      def emailConfig = Mock(EmailConfiguration)
+      remoteEvent.isLocal() >> false
+      remoteEvent.getEmailConfiguration() >> emailConfig
+      emailConfig.copy() >> emailConfig
+      impl.onStoreChanged(remoteEvent)
+
+    then: 'the event is posted'
+      1 * eventManager.post(_ as EmailConfigurationChangedEvent)
   }
 }

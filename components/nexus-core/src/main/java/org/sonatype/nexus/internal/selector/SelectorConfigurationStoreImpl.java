@@ -24,15 +24,17 @@ import org.sonatype.nexus.common.entity.EntityId;
 import org.sonatype.nexus.common.stateguard.Guarded;
 import org.sonatype.nexus.common.stateguard.StateGuardLifecycleSupport;
 import org.sonatype.nexus.orient.DatabaseInstance;
+import org.sonatype.nexus.orient.DatabaseInstanceNames;
 import org.sonatype.nexus.selector.SelectorConfiguration;
-import org.sonatype.nexus.selector.SelectorConfigurationStore;
 
-import com.google.common.collect.Lists;
+import com.google.common.collect.ImmutableList;
 import com.orientechnologies.orient.core.db.document.ODatabaseDocumentTx;
 
 import static com.google.common.base.Preconditions.checkNotNull;
-import static org.sonatype.nexus.common.app.ManagedLifecycle.Phase.STORAGE;
+import static org.sonatype.nexus.common.app.ManagedLifecycle.Phase.SCHEMAS;
 import static org.sonatype.nexus.common.stateguard.StateGuardLifecycleSupport.State.STARTED;
+import static org.sonatype.nexus.orient.transaction.OrientTransactional.inTx;
+import static org.sonatype.nexus.orient.transaction.OrientTransactional.inTxRetry;
 
 /**
  * Default {@link SelectorConfigurationStore} implementation.
@@ -41,7 +43,7 @@ import static org.sonatype.nexus.common.stateguard.StateGuardLifecycleSupport.St
  */
 @Named
 @Singleton
-@ManagedLifecycle(phase = STORAGE)
+@ManagedLifecycle(phase = SCHEMAS)
 public class SelectorConfigurationStoreImpl
     extends StateGuardLifecycleSupport
     implements SelectorConfigurationStore
@@ -51,7 +53,7 @@ public class SelectorConfigurationStoreImpl
   private final SelectorConfigurationEntityAdapter entityAdapter;
 
   @Inject
-  public SelectorConfigurationStoreImpl(@Named("config") final Provider<DatabaseInstance> databaseInstance,
+  public SelectorConfigurationStoreImpl(@Named(DatabaseInstanceNames.CONFIG) final Provider<DatabaseInstance> databaseInstance,
                                         final SelectorConfigurationEntityAdapter entityAdapter)
   {
     this.databaseInstance = databaseInstance;
@@ -65,24 +67,18 @@ public class SelectorConfigurationStoreImpl
     }
   }
 
-  private ODatabaseDocumentTx openDb() {
-    return databaseInstance.get().acquire();
-  }
-
   @Override
   @Guarded(by = STARTED)
   public List<SelectorConfiguration> browse() {
-    try (ODatabaseDocumentTx db = openDb()) {
-      return Lists.newArrayList(entityAdapter.browse.execute(db));
-    }
+    return inTx(databaseInstance).call(db -> ImmutableList.copyOf(entityAdapter.browse(db)));
   }
 
   @Override
   @Guarded(by = STARTED)
   public SelectorConfiguration read(final EntityId entityId) {
-    try (ODatabaseDocumentTx db = openDb()) {
-      return entityAdapter.read.execute(db, entityId);
-    }
+    checkNotNull(entityId);
+
+    return inTx(databaseInstance).call(db -> entityAdapter.read(db, entityId));
   }
 
   @Override
@@ -90,17 +86,15 @@ public class SelectorConfigurationStoreImpl
   public void create(final SelectorConfiguration configuration) {
     checkNotNull(configuration);
 
-    try (ODatabaseDocumentTx db = openDb()) {
-      entityAdapter.addEntity(db, configuration);
-    }
+    inTxRetry(databaseInstance).run(db -> entityAdapter.addEntity(db, configuration));
   }
 
   @Override
   @Guarded(by = STARTED)
   public void update(final SelectorConfiguration configuration) {
-    try (ODatabaseDocumentTx db = openDb()) {
-      entityAdapter.editEntity(db, configuration);
-    }
+    checkNotNull(configuration);
+
+    inTxRetry(databaseInstance).run(db -> entityAdapter.editEntity(db, configuration));
   }
 
   @Override
@@ -108,8 +102,6 @@ public class SelectorConfigurationStoreImpl
   public void delete(final SelectorConfiguration configuration) {
     checkNotNull(configuration);
 
-    try (ODatabaseDocumentTx db = openDb()) {
-      entityAdapter.deleteEntity(db, configuration);
-    }
+    inTxRetry(databaseInstance).run(db -> entityAdapter.deleteEntity(db, configuration));
   }
 }

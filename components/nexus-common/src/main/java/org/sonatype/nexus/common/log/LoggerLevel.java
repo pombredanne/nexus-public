@@ -19,11 +19,6 @@ package org.sonatype.nexus.common.log;
  */
 public enum LoggerLevel
 {
-  /**
-   * @since 2.7
-   */
-  OFF,
-
   TRACE,
   DEBUG,
   INFO,
@@ -33,6 +28,11 @@ public enum LoggerLevel
    * @since 2.7
    */
   ERROR,
+
+  /**
+   * @since 2.7
+   */
+  OFF,
 
   /**
    * Level will be calculated as effective level.

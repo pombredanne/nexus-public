@@ -18,16 +18,21 @@ import javax.inject.Named;
 import javax.inject.Provider;
 import javax.inject.Singleton;
 
-import org.sonatype.goodies.lifecycle.LifecycleSupport;
 import org.sonatype.nexus.common.app.ManagedLifecycle;
+import org.sonatype.nexus.common.stateguard.Guarded;
+import org.sonatype.nexus.common.stateguard.StateGuardLifecycleSupport;
 import org.sonatype.nexus.orient.DatabaseInstance;
+import org.sonatype.nexus.orient.DatabaseInstanceNames;
 import org.sonatype.nexus.security.realm.RealmConfiguration;
 import org.sonatype.nexus.security.realm.RealmConfigurationStore;
 
 import com.orientechnologies.orient.core.db.document.ODatabaseDocumentTx;
 
 import static com.google.common.base.Preconditions.checkNotNull;
-import static org.sonatype.nexus.common.app.ManagedLifecycle.Phase.STORAGE;
+import static org.sonatype.nexus.common.app.ManagedLifecycle.Phase.SCHEMAS;
+import static org.sonatype.nexus.common.stateguard.StateGuardLifecycleSupport.State.STARTED;
+import static org.sonatype.nexus.orient.transaction.OrientTransactional.inTx;
+import static org.sonatype.nexus.orient.transaction.OrientTransactional.inTxRetry;
 
 /**
  * Orient {@link RealmConfigurationStore}.
@@ -35,10 +40,10 @@ import static org.sonatype.nexus.common.app.ManagedLifecycle.Phase.STORAGE;
  * @since 3.0
  */
 @Named("orient")
-@ManagedLifecycle(phase = STORAGE)
+@ManagedLifecycle(phase = SCHEMAS)
 @Singleton
 public class OrientRealmConfigurationStore
-  extends LifecycleSupport
+  extends StateGuardLifecycleSupport
   implements RealmConfigurationStore
 {
   private final Provider<DatabaseInstance> databaseInstance;
@@ -46,7 +51,7 @@ public class OrientRealmConfigurationStore
   private final RealmConfigurationEntityAdapter entityAdapter;
 
   @Inject
-  public OrientRealmConfigurationStore(@Named("security") final Provider<DatabaseInstance> databaseInstance,
+  public OrientRealmConfigurationStore(@Named(DatabaseInstanceNames.SECURITY) final Provider<DatabaseInstance> databaseInstance,
                                        final RealmConfigurationEntityAdapter entityAdapter)
   {
     this.databaseInstance = checkNotNull(databaseInstance);
@@ -60,23 +65,16 @@ public class OrientRealmConfigurationStore
     }
   }
 
-  private ODatabaseDocumentTx openDb() {
-    ensureStarted();
-    return databaseInstance.get().acquire();
-  }
-
   @Override
   @Nullable
+  @Guarded(by = STARTED)
   public RealmConfiguration load() {
-    try (ODatabaseDocumentTx db = openDb()) {
-      return entityAdapter.singleton.get(db);
-    }
+    return inTx(databaseInstance).call(entityAdapter::get);
   }
 
   @Override
+  @Guarded(by = STARTED)
   public void save(final RealmConfiguration configuration) {
-    try (ODatabaseDocumentTx db = openDb()) {
-      entityAdapter.singleton.set(db, configuration);
-    }
+    inTxRetry(databaseInstance).run(db -> entityAdapter.set(db, configuration));
   }
 }

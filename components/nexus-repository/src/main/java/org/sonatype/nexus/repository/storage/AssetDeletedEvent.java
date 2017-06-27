@@ -14,9 +14,9 @@ package org.sonatype.nexus.repository.storage;
 
 import javax.annotation.Nullable;
 
+import org.sonatype.nexus.common.entity.EntityDeletedEvent;
 import org.sonatype.nexus.common.entity.EntityId;
 import org.sonatype.nexus.common.entity.EntityMetadata;
-import org.sonatype.nexus.orient.entity.EntityDeletedEvent;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 
@@ -33,7 +33,9 @@ public class AssetDeletedEvent
 
   private final EntityId componentId;
 
-  public AssetDeletedEvent(final EntityMetadata metadata, final String repositoryName, final EntityId componentId) {
+  public AssetDeletedEvent(final EntityMetadata metadata, final String repositoryName,
+      @Nullable final EntityId componentId)
+  {
     super(metadata);
     this.repositoryName = checkNotNull(repositoryName);
     this.componentId = componentId;

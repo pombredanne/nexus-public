@@ -20,6 +20,9 @@
 Ext.define('NX.coreui.migration.ContentScreen', {
   extend: 'NX.wizard.FormScreen',
   alias: 'widget.nx-coreui-migration-content',
+  requires: [
+    'NX.I18n'
+  ],
 
   /**
    * @override
@@ -28,9 +31,9 @@ Ext.define('NX.coreui.migration.ContentScreen', {
     var me = this;
 
     Ext.apply(me, {
-      title: 'Content',
+      title: NX.I18n.render(me, 'Title'),
 
-      description: '<p>Select the contents to migrate from remote server.</p>',
+      description: NX.I18n.render(me, 'Description'),
 
       fields: [
         {
@@ -39,56 +42,16 @@ Ext.define('NX.coreui.migration.ContentScreen', {
           allowBlank: false,
           items: [
             {
-              xtype: 'checkboxgroup',
-              fieldLabel: 'Security',
-              columns: 1,
-              allowBlank: true,
-              items: [
-                {
-                  xtype: 'checkbox',
-                  name: 'security.anonymous',
-                  boxLabel: 'Anonymous',
-                  checked: true
-                },
-                {
-                  xtype: 'checkbox',
-                  name: 'security.realms',
-                  boxLabel: 'Realms',
-                  checked: false
-                },
-                {
-                  xtype: 'checkbox',
-                  name: 'security.users',
-                  boxLabel: 'Users',
-                  checked: false
-                },
-                {
-                  xtype: 'checkbox',
-                  name: 'security.roles',
-                  boxLabel: 'Roles',
-                  checked: false
-                },
-                {
-                  xtype: 'checkbox',
-                  name: 'ldap',
-                  boxLabel: 'LDAP Configuration',
-                  checked: false
-                }
-              ]
+              xtype: 'checkbox',
+              name: 'repositories',
+              boxLabel: NX.I18n.render(me, 'Repositories_FieldLabel'),
+              checked: true
             },
             {
-              xtype: 'checkboxgroup',
-              fieldLabel: 'Repositories',
-              columns: 1,
-              allowBlank: true,
-              items: [
-                {
-                  xtype: 'checkbox',
-                  name: 'repositories.usermanaged',
-                  boxLabel: 'User-managed repositories',
-                  checked: true
-                }
-              ]
+              xtype: 'checkbox',
+              name: 'configuration',
+              boxLabel: NX.I18n.render(me, 'Configuration_FieldLabel'),
+              checked: true
             }
           ]
         }
@@ -98,5 +61,15 @@ Ext.define('NX.coreui.migration.ContentScreen', {
     });
 
     me.callParent();
+    me.down('form').settingsForm = true;
+  },
+
+  /**
+   * Returns the state of the screen form
+   *
+   * @return {boolean}
+   */
+  isDirty: function() {
+    return this.down('form').isDirty();
   }
 });

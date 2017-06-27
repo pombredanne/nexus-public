@@ -28,6 +28,8 @@ public interface RepositoryManager
 {
   Iterable<Repository> browse();
 
+  boolean exists(String name);
+
   @Nullable
   Repository get(String name);
 
@@ -38,4 +40,6 @@ public interface RepositoryManager
   void delete(String name) throws Exception;
 
   boolean isBlobstoreUsed(String blobStoreName);
+
+  long blobstoreUsageCount(String blobStoreName);
 }

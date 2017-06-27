@@ -24,6 +24,7 @@ import org.sonatype.nexus.bootstrap.jetty.JettyServer;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import uk.org.lidalia.sysoutslf4j.context.SysOutOverSLF4J;
 
 /**
  * Nexus bootstrap launcher.
@@ -46,24 +47,24 @@ public class Launcher
 
   private static final boolean HAS_JUL_BRIDGE;
 
+  private static final boolean HAS_CONSOLE = Boolean.getBoolean("karaf.startLocalConsole");
+
   public static final String IGNORE_SHUTDOWN_HELPER = ShutdownHelper.class.getName() + ".ignore";
 
   public static final String SYSTEM_USERID = "*SYSTEM";
 
   private final JettyServer server;
 
-  public Launcher(final File configFile) throws Exception {
+  public Launcher(final File defaultsFile, @Nullable final File propertiesFile) throws Exception {
 
-    if (HAS_JUL_BRIDGE) {
-      org.slf4j.bridge.SLF4JBridgeHandler.removeHandlersForRootLogger();
-      org.slf4j.bridge.SLF4JBridgeHandler.install();
-    }
+    configureLogging();
 
     ClassLoader cl = getClass().getClassLoader();
 
     ConfigurationBuilder builder = new ConfigurationBuilder().defaults();
 
-    builder.properties(configFile, true);
+    builder.properties(defaultsFile, true);
+    builder.properties(propertiesFile, false);
     builder.override(System.getProperties());
 
     Map<String, String> props = builder.build();
@@ -139,5 +140,20 @@ public class Launcher
 
   public void stop() throws Exception {
     server.stop();
+  }
+
+  /**
+   * Customize logging of the application as necessary. 
+   */
+  private void configureLogging() {
+    if (!HAS_CONSOLE) {
+      SysOutOverSLF4J.registerLoggingSystem("org.ops4j.pax.logging.slf4j");
+      SysOutOverSLF4J.sendSystemOutAndErrToSLF4J();
+    }
+
+    if (HAS_JUL_BRIDGE) {
+      org.slf4j.bridge.SLF4JBridgeHandler.removeHandlersForRootLogger();
+      org.slf4j.bridge.SLF4JBridgeHandler.install();
+    }
   }
 }

@@ -23,7 +23,8 @@ Ext.define('NX.coreui.migration.RepositoriesScreen', {
   requires: [
     'NX.Icons',
     'NX.ext.grid.column.Action',
-    'NX.coreui.migration.SupportedSelectionModel'
+    'NX.coreui.migration.SupportedSelectionModel',
+    'NX.I18n'
   ],
 
   /**
@@ -33,10 +34,9 @@ Ext.define('NX.coreui.migration.RepositoriesScreen', {
     var me = this;
 
     Ext.apply(me, {
-      title: 'Repositories',
+      title: NX.I18n.render(me, 'Title'),
 
-      description: '<p>Select the repositories to be migrated.<br/>' +
-      'Customize advanced configuration of the migration per-repository as needed.</p>',
+      description: NX.I18n.render(me, 'Description'),
 
       grid: {
         xtype: 'grid',
@@ -52,35 +52,42 @@ Ext.define('NX.coreui.migration.RepositoriesScreen', {
 
         columns: [
           {
-            header: 'Repository',
-            dataIndex: 'repository',
+            header: NX.I18n.render(me, 'Repository_Column'),
+            dataIndex: 'name',
             flex: 1
           },
           {
-            header: 'Type',
+            header: NX.I18n.render(me, 'Type_Column'),
             dataIndex: 'type',
             width: 70
           },
           {
-            header: 'Format',
+            header: NX.I18n.render(me, 'Format_Column'),
             dataIndex: 'format'
           },
           {
-            header: 'Supported',
+            header: NX.I18n.render(me, 'Supported_Column'),
             dataIndex: 'supported',
             width: 90
           },
           {
-            header: 'Status',
+            header: NX.I18n.render(me, 'Status_Column'),
             dataIndex: 'status',
-            flex: 1
+            flex: 1,
+            renderer: function (value, meta) {
+              var truncated = Ext.String.ellipsis(value, 40, false);
+              if (truncated !== value) {
+                meta.tdAttr = Ext.String.format('data-qtip="{0}"', Ext.String.htmlEncode(value));
+              }
+              return truncated;
+            }
           },
           {
-            header: 'Destination',
+            header: NX.I18n.render(me, 'Destination_Column'),
             dataIndex: 'blobStore'
           },
           {
-            header: 'Method',
+            header: NX.I18n.render(me, 'Method_Column'),
             dataIndex: 'ingestMethod',
             width: 80,
             renderer: function (value) {
@@ -96,7 +103,7 @@ Ext.define('NX.coreui.migration.RepositoriesScreen', {
               {
                 action: 'customize',
                 iconCls: NX.Icons.cls('migration-customize', 'x16'),
-                tooltip: 'Customize repository options',
+                tooltip: NX.I18n.render(me, 'Action_Tooltip'),
                 isDisabled: function(view, ri, ci, item, record) {
                   return !record.get('supported');
                 }
@@ -126,6 +133,8 @@ Ext.define('NX.coreui.migration.RepositoriesScreen', {
 
     me.callParent();
 
+    me.down('grid').settingsForm = true;
+
     // update hidden field to when grid selection changes
     me.getSelectionModel().on('selectionchange', function(selModel, selected, opts) {
       me.down('hidden').setValue(selected.length);
@@ -144,5 +153,14 @@ Ext.define('NX.coreui.migration.RepositoriesScreen', {
    */
   getSelectionModel: function() {
     return this.getGrid().getSelectionModel();
+  },
+
+  /**
+   * Returns the state of the screen form
+   *
+   * @return {boolean}
+   */
+  isDirty: function() {
+    return this.getGrid().isDirty();
   }
 });

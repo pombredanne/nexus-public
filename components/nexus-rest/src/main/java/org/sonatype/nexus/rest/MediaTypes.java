@@ -25,18 +25,6 @@ public class MediaTypes
     // empty
   }
 
-  // application/vnd.siesta-error-v1+xml
-
-  public static final String VND_ERROR_V1_XML = "application/vnd.siesta-error-v1+xml";
-
-  public static final MediaType VND_ERROR_V1_XML_TYPE = new MediaType("application", "vnd.siesta-error-v1+xml");
-
-  // application/vnd.siesta-error-v1+xml
-
-  public static final String VND_ERROR_V1_JSON = "application/vnd.siesta-error-v1+json";
-
-  public static final MediaType VND_ERROR_V1_JSON_TYPE = new MediaType("application", "vnd.siesta-error-v1+json");
-
   // application/vnd.siesta-validation-errors-v1+xml
 
   public static final String VND_VALIDATION_ERRORS_V1_XML = "application/vnd.siesta-validation-errors-v1+xml";

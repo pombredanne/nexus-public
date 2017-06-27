@@ -13,7 +13,6 @@
 package org.sonatype.nexus.repository.raw.internal;
 
 import java.io.IOException;
-import java.io.InputStream;
 import java.util.Arrays;
 import java.util.List;
 
@@ -23,7 +22,6 @@ import javax.inject.Named;
 import org.sonatype.nexus.blobstore.api.Blob;
 import org.sonatype.nexus.common.collect.AttributesMap;
 import org.sonatype.nexus.common.hash.HashAlgorithm;
-import org.sonatype.nexus.common.io.TempStreamSupplier;
 import org.sonatype.nexus.repository.FacetSupport;
 import org.sonatype.nexus.repository.Repository;
 import org.sonatype.nexus.repository.cache.CacheInfo;
@@ -36,15 +34,16 @@ import org.sonatype.nexus.repository.storage.Bucket;
 import org.sonatype.nexus.repository.storage.Component;
 import org.sonatype.nexus.repository.storage.StorageFacet;
 import org.sonatype.nexus.repository.storage.StorageTx;
+import org.sonatype.nexus.repository.storage.TempBlob;
+import org.sonatype.nexus.repository.transaction.TransactionalDeleteBlob;
+import org.sonatype.nexus.repository.transaction.TransactionalStoreBlob;
+import org.sonatype.nexus.repository.transaction.TransactionalStoreMetadata;
+import org.sonatype.nexus.repository.transaction.TransactionalTouchBlob;
+import org.sonatype.nexus.repository.transaction.TransactionalTouchMetadata;
 import org.sonatype.nexus.repository.view.Content;
 import org.sonatype.nexus.repository.view.Payload;
 import org.sonatype.nexus.repository.view.payloads.BlobPayload;
-import org.sonatype.nexus.transaction.Transactional;
 import org.sonatype.nexus.transaction.UnitOfWork;
-
-import com.google.common.base.Supplier;
-import com.orientechnologies.common.concur.ONeedRetryException;
-import com.orientechnologies.orient.core.storage.ORecordDuplicatedException;
 
 import static org.sonatype.nexus.common.hash.HashAlgorithm.MD5;
 import static org.sonatype.nexus.common.hash.HashAlgorithm.SHA1;
@@ -72,7 +71,7 @@ public class RawContentFacetImpl
 
   @Nullable
   @Override
-  @Transactional(retryOn = IllegalStateException.class, swallow = ONeedRetryException.class)
+  @TransactionalTouchBlob
   public Content get(final String path) {
     StorageTx tx = UnitOfWork.currentTx();
 
@@ -80,7 +79,7 @@ public class RawContentFacetImpl
     if (asset == null) {
       return null;
     }
-    if (asset.markAsAccessed()) {
+    if (asset.markAsDownloaded()) {
       tx.saveAsset(asset);
     }
 
@@ -90,13 +89,14 @@ public class RawContentFacetImpl
 
   @Override
   public Content put(final String path, final Payload content) throws IOException {
-    try (final TempStreamSupplier streamSupplier = new TempStreamSupplier(content.openInputStream())) {
-      return doPutContent(path, streamSupplier, content);
+    StorageFacet storageFacet = facet(StorageFacet.class);
+    try (TempBlob tempBlob = storageFacet.createTempBlob(content, hashAlgorithms)) {
+      return doPutContent(path, tempBlob, content);
     }
   }
 
-  @Transactional(retryOn = {ONeedRetryException.class, ORecordDuplicatedException.class})
-  protected Content doPutContent(final String path, final Supplier<InputStream> streamSupplier, final Payload payload)
+  @TransactionalStoreBlob
+  protected Content doPutContent(final String path, final TempBlob tempBlob, final Payload payload)
       throws IOException
   {
     StorageTx tx = UnitOfWork.currentTx();
@@ -108,11 +108,10 @@ public class RawContentFacetImpl
       contentAttributes = ((Content) payload).getAttributes();
     }
     Content.applyToAsset(asset, Content.maintainLastModified(asset, contentAttributes));
-    final AssetBlob assetBlob = tx.setBlob(
+    AssetBlob assetBlob = tx.setBlob(
         asset,
         path,
-        streamSupplier,
-        hashAlgorithms,
+        tempBlob,
         null,
         payload.getContentType(),
         false
@@ -123,7 +122,7 @@ public class RawContentFacetImpl
     return toContent(asset, assetBlob.getBlob());
   }
 
-  @Transactional(retryOn = {ONeedRetryException.class, ORecordDuplicatedException.class})
+  @TransactionalStoreMetadata
   public Asset getOrCreateAsset(final Repository repository, final String componentName, final String componentGroup,
                                 final String assetName) {
     final StorageTx tx = UnitOfWork.currentTx();
@@ -147,13 +146,13 @@ public class RawContentFacetImpl
       asset = tx.firstAsset(component);
     }
 
-    asset.markAsAccessed();
+    asset.markAsDownloaded();
 
     return asset;
   }
 
   @Override
-  @Transactional
+  @TransactionalDeleteBlob
   public boolean delete(final String path) throws IOException {
     StorageTx tx = UnitOfWork.currentTx();
 
@@ -167,7 +166,7 @@ public class RawContentFacetImpl
   }
 
   @Override
-  @Transactional(retryOn = ONeedRetryException.class)
+  @TransactionalTouchMetadata
   public void setCacheInfo(final String path, final Content content, final CacheInfo cacheInfo) throws IOException {
     StorageTx tx = UnitOfWork.currentTx();
     Bucket bucket = tx.findBucket(getRepository());

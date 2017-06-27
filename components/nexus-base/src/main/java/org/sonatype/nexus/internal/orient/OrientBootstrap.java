@@ -18,10 +18,10 @@ import javax.inject.Named;
 import javax.inject.Provider;
 import javax.inject.Singleton;
 
-import org.sonatype.goodies.lifecycle.LifecycleSupport;
 import org.sonatype.goodies.lifecycle.Lifecycles;
 import org.sonatype.nexus.common.app.ManagedLifecycle;
-import org.sonatype.nexus.common.node.LocalNodeAccess;
+import org.sonatype.nexus.common.node.NodeAccess;
+import org.sonatype.nexus.common.stateguard.StateGuardLifecycleSupport;
 import org.sonatype.nexus.orient.DatabaseManager;
 import org.sonatype.nexus.orient.DatabaseServer;
 
@@ -43,22 +43,22 @@ import static org.sonatype.nexus.common.app.ManagedLifecycle.Phase.STORAGE;
 @Priority(Integer.MAX_VALUE) // make sure this starts first
 @Singleton
 public class OrientBootstrap
-    extends LifecycleSupport
+    extends StateGuardLifecycleSupport
 {
-  private final Provider<LocalNodeAccess> localNodeAccess;
+  private final NodeAccess nodeAccess;
 
   private final Provider<DatabaseServer> databaseServer;
 
   private final Provider<DatabaseManager> databaseManager;
 
   @Inject
-  public OrientBootstrap(final Provider<LocalNodeAccess> localNodeAccess,
+  public OrientBootstrap(final NodeAccess nodeAccess,
                          final Provider<DatabaseServer> databaseServer,
                          final Provider<DatabaseManager> databaseManager,
                          final Iterable<OCompression> managedCompressions,
                          final Iterable<OSQLFunctionAbstract> functions)
   {
-    this.localNodeAccess = checkNotNull(localNodeAccess);
+    this.nodeAccess = checkNotNull(nodeAccess);
     this.databaseServer = checkNotNull(databaseServer);
     this.databaseManager = checkNotNull(databaseManager);
     registerCompressions(checkNotNull(managedCompressions));
@@ -68,7 +68,8 @@ public class OrientBootstrap
 
   @Override
   protected void doStart() throws Exception {
-    localNodeAccess.get().start();
+    nodeAccess.start();
+
     databaseServer.get().start();
 
     Lifecycles.start(databaseManager.get());
@@ -79,7 +80,8 @@ public class OrientBootstrap
     Lifecycles.stop(databaseManager.get());
 
     databaseServer.get().stop();
-    localNodeAccess.get().stop();
+
+    nodeAccess.stop();
   }
 
   private void registerCompressions(final Iterable<OCompression> compressions) {

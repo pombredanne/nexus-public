@@ -112,7 +112,7 @@ public class StateGuard
       }
     }
 
-    throw new IllegalStateException("Invalid state: " + current + "; allowed: " + Arrays.toString(allowed));
+    throw new InvalidStateException(current, allowed);
   }
 
   /**
@@ -186,12 +186,12 @@ public class StateGuard
         }
 
         try {
-          log.trace("Transitioning: {} -> {}", current, to);
+          log.debug("Transitioning: {} -> {}", current, to);
 
           V result = action.run();
           current = to;
 
-          log.trace("Transitioned: {}", to);
+          log.debug("Transitioned: {}", to);
 
           return result;
         }
@@ -199,7 +199,7 @@ public class StateGuard
           if (ignore(t)) {
             current = to;
 
-            log.trace("Transitioned: {} ignoring: {}", to, t.toString());
+            log.debug("Transitioned: {} ignoring: {}", to, t.toString());
           }
           else {
             if (silent) {
@@ -216,7 +216,7 @@ public class StateGuard
           }
 
           Throwables.propagateIfPossible(t, Exception.class, Error.class);
-          throw Throwables.propagate(t);
+          throw new RuntimeException(t);
         }
       }
       finally {
@@ -284,6 +284,8 @@ public class StateGuard
    */
   public static class Builder
   {
+    private static final Logger defaultLogger = Loggers.getLogger(StateGuard.class);
+
     private Logger logger;
 
     private ReadWriteLock lock;
@@ -316,7 +318,7 @@ public class StateGuard
 
     public StateGuard create() {
       return new StateGuard(
-          logger != null ? logger : Loggers.getLogger(StateGuard.class),
+          logger != null ? logger : defaultLogger,
           lock != null ? lock : new ReentrantReadWriteLock(),
           initial,
           failure

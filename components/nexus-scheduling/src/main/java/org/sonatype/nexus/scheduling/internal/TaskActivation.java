@@ -12,13 +12,21 @@
  */
 package org.sonatype.nexus.scheduling.internal;
 
+import java.util.concurrent.Future;
+
 import javax.inject.Inject;
 import javax.inject.Named;
 import javax.inject.Singleton;
 
-import org.sonatype.goodies.lifecycle.LifecycleSupport;
 import org.sonatype.nexus.common.app.ManagedLifecycle;
+import org.sonatype.nexus.common.stateguard.StateGuardLifecycleSupport;
+import org.sonatype.nexus.common.event.EventAware;
+import org.sonatype.nexus.orient.freeze.DatabaseFreezeChangeEvent;
+import org.sonatype.nexus.orient.freeze.DatabaseFreezeService;
+import org.sonatype.nexus.scheduling.TaskInfo;
 import org.sonatype.nexus.scheduling.spi.SchedulerSPI;
+
+import com.google.common.eventbus.Subscribe;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static org.sonatype.nexus.common.app.ManagedLifecycle.Phase.TASKS;
@@ -32,22 +40,49 @@ import static org.sonatype.nexus.common.app.ManagedLifecycle.Phase.TASKS;
 @ManagedLifecycle(phase = TASKS)
 @Singleton
 public class TaskActivation
-    extends LifecycleSupport
+    extends StateGuardLifecycleSupport
+    implements EventAware
 {
   private final SchedulerSPI scheduler;
 
+  private final DatabaseFreezeService databaseFreezeService;
+
   @Inject
-  public TaskActivation(final SchedulerSPI scheduler) {
+  public TaskActivation(final SchedulerSPI scheduler, final DatabaseFreezeService databaseFreezeService) {
     this.scheduler = checkNotNull(scheduler);
+    this.databaseFreezeService = checkNotNull(databaseFreezeService);
   }
 
   @Override
   protected void doStart() throws Exception {
-    scheduler.resume();
+    if (!databaseFreezeService.isFrozen()) {
+      scheduler.resume();
+    }
   }
 
   @Override
   protected void doStop() throws Exception {
     scheduler.pause();
+  }
+
+  /**
+   * @since 3.2.1
+   */
+  @Subscribe
+  public void onDatabaseFreezeChangeEvent(final DatabaseFreezeChangeEvent databaseFreezeChangeEvent) {
+    if (databaseFreezeChangeEvent.isFrozen()) {
+      scheduler.pause();
+      scheduler.listsTasks().stream()
+          .filter(taskInfo -> !maybeCancel(taskInfo))
+          .forEach(taskInfo -> log.warn("Unable to cancel task: {}", taskInfo.getName()));
+    }
+    else {
+      scheduler.resume();
+    }
+  }
+
+  private boolean maybeCancel(final TaskInfo taskInfo) {
+    Future future = taskInfo.getCurrentState().getFuture();
+    return future == null || future.cancel(false);
   }
 }

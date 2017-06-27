@@ -37,7 +37,12 @@ import org.sonatype.nexus.script.plugin.internal.security.ScriptPermission
 import org.sonatype.nexus.security.BreadActions
 import org.sonatype.nexus.security.SecurityHelper
 
+import com.codahale.metrics.annotation.ExceptionMetered
 import com.codahale.metrics.annotation.Timed
+import io.swagger.annotations.Api
+import io.swagger.annotations.ApiOperation
+import io.swagger.annotations.ApiResponse
+import io.swagger.annotations.ApiResponses
 import org.slf4j.LoggerFactory
 
 import static com.google.common.base.Preconditions.checkArgument
@@ -54,6 +59,7 @@ import static org.sonatype.nexus.security.privilege.PrivilegeDescriptorSupport.A
 @Path(ScriptResource.RESOURCE_URI)
 @Produces([APPLICATION_JSON])
 @Consumes([APPLICATION_JSON])
+@Api('script')
 class ScriptResource
     extends ComponentSupport
     implements ScriptClient, Resource
@@ -71,13 +77,20 @@ class ScriptResource
 
   @Override
   @Timed
-  List browse() {
+  @ExceptionMetered
+  @ApiOperation('List all stored scripts')
+  List<ScriptXO> browse() {
     securityHelper.ensurePermitted(scriptPermission(ALL, BreadActions.BROWSE))
     return scriptManager.browse().collect { convert(it) }
   }
 
   @Override
   @Timed
+  @ExceptionMetered
+  @ApiOperation('Read stored script by name')
+  @ApiResponses(
+      @ApiResponse(code = 404, message = 'No script with the specified name')
+  )
   ScriptXO read(@PathParam('name') final String name) {
     securityHelper.ensurePermitted(scriptPermission(name, BreadActions.READ))
     return convert(findOr404(name))
@@ -85,6 +98,12 @@ class ScriptResource
 
   @Override
   @Timed
+  @ExceptionMetered
+  @ApiOperation('Update stored script by name')
+  @ApiResponses([
+      @ApiResponse(code = 204, message = 'Script was updated'),
+      @ApiResponse(code = 404, message = 'No script with the specified name')
+  ])
   void edit(@PathParam('name') final String name, @NotNull @Valid final ScriptXO scriptXO) {
     securityHelper.ensurePermitted(scriptPermission(name, BreadActions.EDIT))
     checkArgument(name == scriptXO.name, "Path parameter: $name does not match data name: ${scriptXO.name}")
@@ -95,6 +114,11 @@ class ScriptResource
 
   @Override
   @Timed
+  @ExceptionMetered
+  @ApiOperation('Add a new script')
+  @ApiResponses(
+      @ApiResponse(code = 204, message = 'Script was added')
+  )
   void add(@NotNull @Valid final ScriptXO scriptXO) {
     securityHelper.ensurePermitted(scriptPermission(ALL, BreadActions.ADD))
     log.debug('Adding Script named: {}', scriptXO.name)
@@ -103,6 +127,12 @@ class ScriptResource
 
   @Override
   @Timed
+  @ExceptionMetered
+  @ApiOperation('Delete stored script by name')
+  @ApiResponses([
+      @ApiResponse(code = 204, message = 'Script was deleted'),
+      @ApiResponse(code = 404, message = 'No script with the specified name')
+  ])
   void delete(@PathParam('name') final String name) {
     securityHelper.ensurePermitted(scriptPermission(name, BreadActions.DELETE))
     log.debug('Deleting Script named: {}', name)
@@ -111,6 +141,12 @@ class ScriptResource
 
   @Override
   @Timed
+  @ExceptionMetered
+  @ApiOperation('Run stored script by name')
+  @ApiResponses([
+      @ApiResponse(code = 404, message = 'No script with the specified name'),
+      @ApiResponse(code = 500, message = 'Script execution failed with exception')
+  ])
   ScriptResultXO run(final @PathParam('name') String name, final String args) {
     securityHelper.ensurePermitted(scriptPermission(name, RUN_ACTION))
     log.debug('Running Script named: {}', name)
@@ -122,7 +158,7 @@ class ScriptResource
       result = scriptService.eval(script.type, script.content,
           [
               log : LoggerFactory.getLogger(this.getClass()),
-              args: args
+              args: args?.trim()
           ]
       )
     }

@@ -70,12 +70,18 @@ public class RepositoryMetadataMerger
     ArrayList<Envelope> metadatas = new ArrayList<>(contents.size());
     for (Map.Entry<Repository, Content> entry : contents.entrySet()) {
       final String origin = entry.getKey().getName() + " @ " + mavenPath.getPath();
-      final Metadata metadata = MavenModels.readMetadata(entry.getValue().openInputStream());
-      if (metadata == null) {
-        log.debug("Corrupted repository metadata: {}", origin);
-        continue;
+      try {
+        final Metadata metadata = MavenModels.readMetadata(entry.getValue().openInputStream());
+        if (metadata == null) {
+          log.debug("Corrupted repository metadata: {}, source: {}", origin, entry.getValue());
+          continue;
+        }
+        metadatas.add(new Envelope(origin, metadata));
       }
-      metadatas.add(new Envelope(origin, metadata));
+      catch (IOException e) {
+        log.debug("Error downloading repository metadata: {}, source: {}", origin, entry.getValue());
+        throw new IOException("Error downloading repository metadata for " + origin + ": " + e.getMessage(), e);
+      }
     }
 
     final Metadata mergedMetadata = merge(metadatas);
@@ -244,10 +250,16 @@ public class RepositoryMetadataMerger
         Objects
             .equals(nullOrEmptyStringFilter(target.getArtifactId()), nullOrEmptyStringFilter(source.getArtifactId())),
         "ArtifactId mismatch: %s vs %s", target.getArtifactId(), source.getArtifactId());
-    checkArgument(
-        Objects.equals(nullOrEmptyStringFilter(target.getVersion()), nullOrEmptyStringFilter(source.getVersion())),
-        "Version mismatch: %s vs %s", target.getVersion(), source.getVersion());
 
+    String targetVersion = nullOrEmptyStringFilter(target.getVersion());
+    String sourceVersion = nullOrEmptyStringFilter(source.getVersion());
+
+    // As per NEXUS-13085 allow this and log for support in case the resulting merge leads to downstream problems
+    if (!Objects.equals(targetVersion, sourceVersion)) {
+      log.warn("Merging with version mismatch for GA={}:{}, {} vs {}", target.getGroupId(), target.getArtifactId(),
+          targetVersion, sourceVersion);
+    }
+    
     mergePlugins(target, source);
     mergeVersioning(target, source);
     return target;

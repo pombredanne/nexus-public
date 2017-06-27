@@ -12,6 +12,8 @@
  */
 package org.sonatype.nexus.coreui
 
+import org.sonatype.nexus.validation.group.Create
+
 import org.hibernate.validator.constraints.NotEmpty
 import org.hibernate.validator.constraints.Range
 
@@ -21,13 +23,14 @@ import org.hibernate.validator.constraints.Range
 class BlobStoreXO
 {
   @NotEmpty
+  @UniqueBlobStoreName(groups = Create)
   String name
 
   @NotEmpty
   String type
 
   @NotEmpty
-  String attributes
+  Map<String, Map<String, Object>> attributes
 
   @Range
   long blobCount
@@ -38,5 +41,6 @@ class BlobStoreXO
   @Range
   long availableSpace
 
-  boolean inUse
+  @Range
+  long repositoryUseCount
 }

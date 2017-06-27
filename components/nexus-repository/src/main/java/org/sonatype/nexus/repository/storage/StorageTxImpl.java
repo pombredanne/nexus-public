@@ -15,8 +15,10 @@ package org.sonatype.nexus.repository.storage;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Path;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Map.Entry;
 import java.util.Objects;
 
 import javax.annotation.Nonnull;
@@ -43,21 +45,25 @@ import org.sonatype.nexus.repository.IllegalOperationException;
 import org.sonatype.nexus.repository.Repository;
 
 import com.google.common.base.Supplier;
-import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
+import com.google.common.collect.ImmutableMap.Builder;
 import com.google.common.collect.Iterables;
+import com.google.common.hash.HashCode;
 import com.orientechnologies.orient.core.db.document.ODatabaseDocumentTx;
 import com.orientechnologies.orient.core.record.impl.ODocument;
 import com.orientechnologies.orient.core.tx.OTransaction.TXTYPE;
+import org.joda.time.DateTime;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkNotNull;
-import static com.google.common.base.Preconditions.checkState;
+import static java.lang.String.format;
 import static org.sonatype.nexus.common.entity.EntityHelper.id;
 import static org.sonatype.nexus.repository.storage.Asset.CHECKSUM;
+import static org.sonatype.nexus.repository.storage.Asset.HASHES_NOT_VERIFIED;
+import static org.sonatype.nexus.repository.storage.Asset.PROVENANCE;
 import static org.sonatype.nexus.repository.storage.MetadataNodeEntityAdapter.P_ATTRIBUTES;
 import static org.sonatype.nexus.repository.storage.StorageTxImpl.State.ACTIVE;
 import static org.sonatype.nexus.repository.storage.StorageTxImpl.State.CLOSED;
@@ -73,7 +79,8 @@ public class StorageTxImpl
 {
   private static final Logger log = LoggerFactory.getLogger(StorageTxImpl.class);
 
-  private static final long DELETE_BATCH_SIZE = 100L;
+  private static final int INITIAL_DELAY_MS = SystemPropertiesHelper
+      .getInteger(StorageTxImpl.class.getName() + ".retrydelay.initial", 10);
 
   private static final int MAX_RETRIES = 8;
 
@@ -89,7 +96,7 @@ public class StorageTxImpl
 
   private final WritePolicySelector writePolicySelector;
 
-  private final StateGuard stateGuard = new StateGuard.Builder().initial(OPEN).create();
+  private final StateGuard stateGuard = new StateGuard.Builder().initial(OPEN).logger(log).create();
 
   private final BucketEntityAdapter bucketEntityAdapter;
 
@@ -106,8 +113,6 @@ public class StorageTxImpl
   private int retries = 0;
 
   private NumberSequence retryDelay;
-
-  private final int initialDelay;
 
   public StorageTxImpl(final String createdBy,
                        final BlobTx blobTx,
@@ -139,8 +144,6 @@ public class StorageTxImpl
     // To be discussed in future, or at the point when we will have need for nested TX
     // Note: orient DB sports some rudimentary support for nested TXes
     checkArgument(!db.getTransaction().isActive(), "Nested DB TX!");
-
-    initialDelay = SystemPropertiesHelper.getInteger(getClass().getName() + ".retrydelay.initial", 10);
   }
 
   public static final class State
@@ -199,7 +202,7 @@ public class StorageTxImpl
         Thread.sleep(delay);
       }
       catch (InterruptedException e) {
-        Throwables.propagate(e);
+        throw new RuntimeException(e);
       }
 
       retries++;
@@ -207,7 +210,7 @@ public class StorageTxImpl
       return true;
     }
 
-    String message = String.format("Reached max retries: %d/%d", retries, MAX_RETRIES);
+    String message = format("Reached max retries: %d/%d", retries, MAX_RETRIES);
     log.warn(message);
 
     throw new RetryDeniedException(message, cause);
@@ -233,7 +236,12 @@ public class StorageTxImpl
   @Override
   @Guarded(by = {ACTIVE})
   public Iterable<ODocument> browse(final String selectSql, @Nullable final Map<String, Object> params) {
-    return OrientAsyncHelper.asyncIterable(db, selectSql, params);
+    if (Strings2.isBlank(selectSql)) {
+      return Collections.emptyList();
+    }
+    else {
+      return OrientAsyncHelper.asyncIterable(db, selectSql, params);
+    }
   }
 
   @Nullable
@@ -243,10 +251,17 @@ public class StorageTxImpl
     return bucketOf(repository.getName());
   }
 
+  @Nullable
+  @Override
+  @Guarded(by = ACTIVE)
+  public Iterable<Bucket> findBuckets(final Iterable<Repository> repositories) {
+    return bucketsOf(repositories);
+  }
+
   @Override
   @Guarded(by = ACTIVE)
   public Iterable<Bucket> browseBuckets() {
-    return bucketEntityAdapter.browse.execute(db);
+    return bucketEntityAdapter.browse(db);
   }
 
   @Override
@@ -279,7 +294,7 @@ public class StorageTxImpl
   public Asset findAsset(final EntityId id, final Bucket bucket) {
     checkNotNull(id);
     checkNotNull(bucket);
-    Asset asset = assetEntityAdapter.read.execute(db, id);
+    Asset asset = assetEntityAdapter.read(db, id);
     return bucketOwns(bucket, asset) ? asset : null;
   }
 
@@ -336,11 +351,19 @@ public class StorageTxImpl
   @Nullable
   @Override
   @Guarded(by = ACTIVE)
-  public Component findComponent(final EntityId id, final Bucket bucket) {
+  public Component findComponentInBucket(final EntityId id, final Bucket bucket) {
     checkNotNull(id);
     checkNotNull(bucket);
-    Component component = componentEntityAdapter.read.execute(db, id);
+    Component component = findComponent(id);
     return bucketOwns(bucket, component) ? component : null;
+  }
+
+  @Nullable
+  @Override
+  @Guarded(by = ACTIVE)
+  public Component findComponent(final EntityId id) {
+    checkNotNull(id);
+    return componentEntityAdapter.read(db, id);
   }
 
   @Nullable
@@ -364,6 +387,15 @@ public class StorageTxImpl
   @Guarded(by = ACTIVE)
   public Iterable<Component> findComponents(final Query query, @Nullable final Iterable<Repository> repositories) {
     return findComponents(query.getWhere(), query.getParameters(), repositories, query.getQuerySuffix());
+  }
+
+  @Override
+  @Guarded(by = ACTIVE)
+  public Iterable<Component> findComponentsByNameCaseInsensitive(final String name,
+                                                                 @Nullable final Iterable<Repository> repositories,
+                                                                 @Nullable final String querySuffix)
+  {
+    return componentEntityAdapter.browseByNameCaseInsensitive(db, name, bucketsOf(repositories), querySuffix);
   }
 
   @Override
@@ -474,43 +506,9 @@ public class StorageTxImpl
 
     BlobRef blobRef = asset.blobRef();
     if (blobRef != null) {
-      deleteBlob(blobRef, effectiveWritePolicy);
+      deleteBlob(blobRef, effectiveWritePolicy, format("Deleting asset %s", EntityHelper.id(asset)));
     }
     assetEntityAdapter.deleteEntity(db, asset);
-  }
-
-  @Override
-  @Guarded(by = ACTIVE)
-  public void deleteBucket(Bucket bucket) {
-    checkNotNull(bucket);
-
-    long count = 0;
-
-    // first delete all components and constituent assets
-    for (Component component : browseComponents(bucket)) {
-      deleteComponent(component, false);
-      count++;
-      if (count == DELETE_BATCH_SIZE) {
-        commit();
-        count = 0;
-      }
-    }
-    commit();
-
-    // then delete all standalone assets
-    for (Asset asset : browseAssets(bucket)) {
-      deleteAsset(asset, null);
-      count++;
-      if (count == DELETE_BATCH_SIZE) {
-        commit();
-        count = 0;
-      }
-    }
-    commit();
-
-    // finally, delete the bucket document
-    bucketEntityAdapter.deleteEntity(db, bucket);
-    commit();
   }
 
   @Override
@@ -525,16 +523,85 @@ public class StorageTxImpl
     checkNotNull(blobName);
     checkNotNull(streamSupplier);
     checkNotNull(hashAlgorithms);
-    checkArgument(
-        !skipContentVerification || !Strings2.isBlank(declaredContentType),
-        "skipContentVerification set true but no declaredContentType provided"
-    );
 
     if (!writePolicy.checkCreateAllowed()) {
       throw new IllegalOperationException("Repository is read only: " + bucket.getRepositoryName());
     }
 
-    ImmutableMap.Builder<String, String> storageHeaders = ImmutableMap.builder();
+    Map<String, String> storageHeadersMap = buildStorageHeaders(blobName, streamSupplier, headers, declaredContentType,
+        skipContentVerification);
+    return blobTx.create(
+        streamSupplier.get(),
+        storageHeadersMap,
+        hashAlgorithms,
+        storageHeadersMap.get(BlobStore.CONTENT_TYPE_HEADER)
+    );
+  }
+
+  @Override
+  @Guarded(by = ACTIVE)
+  public AssetBlob createBlob(final String blobName,
+                              final Path sourceFile,
+                              final Map<HashAlgorithm, HashCode> hashes,
+                              @Nullable final Map<String, String> headers,
+                              final String declaredContentType,
+                              final long size) throws IOException
+  {
+    checkNotNull(blobName);
+    checkNotNull(sourceFile);
+    checkNotNull(hashes);
+    checkArgument(!Strings2.isBlank(declaredContentType), "no declaredContentType provided");
+
+    if (!writePolicy.checkCreateAllowed()) {
+      throw new IllegalOperationException("Repository is read only: " + bucket.getRepositoryName());
+    }
+
+    Map<String, String> storageHeaders = buildStorageHeaders(blobName, null, headers, declaredContentType, true);
+    return blobTx.createByHardLinking(
+        sourceFile,
+        storageHeaders,
+        hashes,
+        declaredContentType,
+        size
+    );
+  }
+
+  @Override
+  public AssetBlob createBlob(final String blobName,
+                              final TempBlob originalBlob,
+                              @Nullable final Map<String, String> headers,
+                              @Nullable final String declaredContentType,
+                              boolean skipContentVerification)
+      throws IOException
+  {
+    checkNotNull(blobName);
+    checkNotNull(originalBlob);
+
+    if (!writePolicy.checkCreateAllowed()) {
+      throw new IllegalOperationException("Repository is read only: " + bucket.getRepositoryName());
+    }
+
+    Map<String, String> storageHeadersMap = buildStorageHeaders(blobName, originalBlob, headers, declaredContentType,
+        skipContentVerification);
+    return blobTx.createByCopying(
+        originalBlob.getBlob().getId(),
+        storageHeadersMap,
+        originalBlob.getHashes(),
+        originalBlob.getHashesVerified()
+    );
+  }
+
+  private Map<String, String> buildStorageHeaders(final String blobName,
+                                                  @Nullable final Supplier<InputStream> streamSupplier,
+                                                  @Nullable final Map<String, String> headers,
+                                                  @Nullable final String declaredContentType,
+                                                  final boolean skipContentVerification) throws IOException
+  {
+    checkArgument(
+        !skipContentVerification || !Strings2.isBlank(declaredContentType),
+        "skipContentVerification set true but no declaredContentType provided"
+    );
+    Builder<String, String> storageHeaders = ImmutableMap.builder();
     storageHeaders.put(Bucket.REPO_NAME_HEADER, bucket.getRepositoryName());
     storageHeaders.put(BlobStore.BLOB_NAME_HEADER, blobName);
     storageHeaders.put(BlobStore.CREATED_BY_HEADER, createdBy);
@@ -550,46 +617,7 @@ public class StorageTxImpl
     if (headers != null) {
       storageHeaders.putAll(headers);
     }
-    Map<String, String> storageHeadersMap = storageHeaders.build();
-    return blobTx.create(
-        streamSupplier.get(),
-        storageHeadersMap,
-        hashAlgorithms,
-        storageHeadersMap.get(BlobStore.CONTENT_TYPE_HEADER)
-    );
-  }
-
-  @Override
-  @Guarded(by = ACTIVE)
-  public AssetBlob createBlob(final String blobName,
-                              final Path sourceFile,
-                              final Iterable<HashAlgorithm> hashAlgorithms,
-                              @Nullable final Map<String, String> headers,
-                              final String declaredContentType) throws IOException
-  {
-    checkNotNull(blobName);
-    checkNotNull(sourceFile);
-    checkNotNull(hashAlgorithms);
-    checkArgument(!Strings2.isBlank(declaredContentType), "no declaredContentType provided");
-
-    if (!writePolicy.checkCreateAllowed()) {
-      throw new IllegalOperationException("Repository is read only: " + bucket.getRepositoryName());
-    }
-
-    ImmutableMap.Builder<String, String> storageHeaders = ImmutableMap.builder();
-    storageHeaders.put(Bucket.REPO_NAME_HEADER, bucket.getRepositoryName());
-    storageHeaders.put(BlobStore.BLOB_NAME_HEADER, blobName);
-    storageHeaders.put(BlobStore.CREATED_BY_HEADER, createdBy);
-    storageHeaders.put(BlobStore.CONTENT_TYPE_HEADER, declaredContentType);
-    if (headers != null) {
-      storageHeaders.putAll(headers);
-    }
-    return blobTx.createByHardLinking(
-        sourceFile,
-        storageHeaders.build(),
-        hashAlgorithms,
-        declaredContentType
-    );
+    return storageHeaders.build();
   }
 
   @Override
@@ -605,27 +633,113 @@ public class StorageTxImpl
       throw new IllegalOperationException("Repository is read only: " + bucket.getRepositoryName());
     }
 
-    // Delete old blob if necessary
-    BlobRef oldBlobRef = asset.blobRef();
-    if (oldBlobRef != null) {
-      if (!effectiveWritePolicy.checkUpdateAllowed()) {
-        throw new IllegalOperationException(
-            "Repository does not allow updating assets: " + bucket.getRepositoryName());
-      }
-      deleteBlob(oldBlobRef, effectiveWritePolicy);
-    }
-
-    asset.blobRef(assetBlob.getBlobRef());
-    asset.size(assetBlob.getSize());
-    asset.contentType(assetBlob.getContentType());
-
-    // Set attributes map to contain computed checksum metadata
     NestedAttributesMap checksums = asset.attributes().child(CHECKSUM);
-    for (HashAlgorithm algorithm : assetBlob.getHashes().keySet()) {
-      checksums.set(algorithm.name(), assetBlob.getHashes().get(algorithm).toString());
-    }
 
-    assetBlob.setAttached(true);
+    if (!isDuplicateBlob(asset, assetBlob, effectiveWritePolicy, checksums)) {
+      maybeDeleteBlob(asset, effectiveWritePolicy);
+
+      asset.blobRef(assetBlob.getBlobRef());
+      asset.size(assetBlob.getSize());
+      asset.contentType(assetBlob.getContentType());
+
+      // Set attributes map to contain computed checksum metadata
+      for (Entry<HashAlgorithm, HashCode> entry : assetBlob.getHashes().entrySet()) {
+        HashAlgorithm algorithm = entry.getKey();
+        HashCode checksum = entry.getValue();
+        checksums.set(algorithm.name(), checksum.toString());
+      }
+
+      // Mark assets whose checksums were not verified locally, for possible later verification
+      asset.attributes().child(PROVENANCE).set(HASHES_NOT_VERIFIED, !assetBlob.getHashesVerified());
+
+      assetBlob.setAttached(true);
+    }
+  }
+
+  /**
+   * Returns {@code true} when at least one incoming hash has the same algorithm as an existing checksum.
+   */
+  private boolean checksumExists(final NestedAttributesMap checksums, final AssetBlob assetBlob) {
+    if (!checksums.isEmpty()) {
+      for (HashAlgorithm algorithm : assetBlob.getHashes().keySet()) {
+        if (checksums.contains(algorithm.name())) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Returns {@code true} when incoming hashes all match existing checksums.
+   */
+  private boolean compareChecksums(final NestedAttributesMap checksums, final AssetBlob assetBlob) {
+    for (Entry<HashAlgorithm, HashCode> entry : assetBlob.getHashes().entrySet()) {
+      HashAlgorithm algorithm = entry.getKey();
+      HashCode checksum = entry.getValue();
+      if (!checksum.toString().equals(checksums.get(algorithm.name()))) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Checks whether incoming blob is a duplicate of existing asset blob; if so it re-uses the old blob.
+   */
+  private boolean isDuplicateBlob(final Asset asset,
+                                  final AssetBlob assetBlob,
+                                  final WritePolicy effectiveWritePolicy,
+                                  final NestedAttributesMap checksums)
+  {
+    if (asset.blobRef() != null) {
+      Blob oldBlob = blobTx.get(asset.blobRef());
+      if (oldBlob != null) {
+        boolean checksumsMatch;
+        if (assetBlob.getHashesVerified() && checksumExists(checksums, assetBlob)) {
+          // we have verified hashes, use those to avoid touching blob metrics
+          checksumsMatch = compareChecksums(checksums, assetBlob);
+        }
+        else {
+          // fall back to blob metrics, which involves fetching the new blob
+          String oldBlobSha1 = oldBlob.getMetrics().getSha1Hash();
+          String newBlobSha1 = assetBlob.getBlob().getMetrics().getSha1Hash();
+          checksumsMatch = oldBlobSha1.equalsIgnoreCase(newBlobSha1);
+        }
+        if (checksumsMatch) {
+          // still respect write policy even when de-duplicating
+          if (!effectiveWritePolicy.checkUpdateAllowed()) {
+            throw new IllegalOperationException(
+                "Repository does not allow updating assets: " + bucket.getRepositoryName());
+          }
+          assetBlob.setDuplicate(oldBlob);
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Deletes the existing blob for the asset if one exists, updating the blob updated field if necessary. The
+   * write policy will be enforced for this operation and will throw an exception if updates are not supported.
+   */
+  private void maybeDeleteBlob(final Asset asset, final WritePolicy effectiveWritePolicy)
+  {
+    DateTime now = DateTime.now();
+    if (asset.blobRef() != null) {
+      // updating old blob
+      if (!effectiveWritePolicy.checkUpdateAllowed()) {
+        throw new IllegalOperationException("Repository does not allow updating assets: " + bucket.getRepositoryName());
+      }
+      asset.blobUpdated(now);
+      deleteBlob(asset.blobRef(), effectiveWritePolicy, format("Updating asset %s", EntityHelper.id(asset)));
+    }
+    else {
+      // creating new blob
+      asset.blobCreated(now);
+      asset.blobUpdated(now);
+    }
   }
 
   @Override
@@ -665,9 +779,10 @@ public class StorageTxImpl
   public AssetBlob setBlob(final Asset asset,
                            final String blobName,
                            final Path sourceFile,
-                           final Iterable<HashAlgorithm> hashAlgorithms,
+                           final Map<HashAlgorithm, HashCode> hashes,
                            @Nullable final Map<String, String> headers,
-                           String declaredContentType) throws IOException
+                           final String declaredContentType,
+                           final long size) throws IOException
   {
     checkNotNull(asset);
     checkArgument(!Strings2.isBlank(declaredContentType), "no declaredContentType provided");
@@ -683,10 +798,34 @@ public class StorageTxImpl
     final AssetBlob assetBlob = createBlob(
         blobName,
         sourceFile,
-        hashAlgorithms,
+        hashes,
         headers,
-        declaredContentType
+        declaredContentType,
+        size
     );
+    attachBlob(asset, assetBlob);
+    return assetBlob;
+  }
+
+  @Override
+  public AssetBlob setBlob(final Asset asset,
+                           final String blobName,
+                           final TempBlob originalBlob,
+                           @Nullable final Map<String, String> headers,
+                           @Nullable String declaredContentType,
+                           boolean skipContentVerification)
+      throws IOException
+  {
+    checkNotNull(blobName);
+    checkNotNull(originalBlob);
+
+    // Enforce write policy ahead, as we have asset here
+    BlobRef oldBlobRef = asset.blobRef();
+    if (oldBlobRef != null && !writePolicySelector.select(asset, writePolicy).checkUpdateAllowed()) {
+      throw new IllegalOperationException(
+          "Repository does not allow updating assets: " + bucket.getRepositoryName());
+    }
+    AssetBlob assetBlob = createBlob(blobName, originalBlob, headers, declaredContentType, skipContentVerification);
     attachBlob(asset, assetBlob);
     return assetBlob;
   }
@@ -704,7 +843,9 @@ public class StorageTxImpl
   @Guarded(by = ACTIVE)
   public Blob requireBlob(final BlobRef blobRef) {
     Blob blob = getBlob(blobRef);
-    checkState(blob != null, "Blob not found: %s", blobRef);
+    if (blob == null) {
+      throw new MissingBlobException(blobRef);
+    }
     return blob;
   }
 
@@ -726,13 +867,13 @@ public class StorageTxImpl
   /**
    * Deletes a blob w/ enforcing {@link WritePolicy} if not {@code null}. otherwise write policy will NOT be checked.
    */
-  private void deleteBlob(final BlobRef blobRef, @Nullable WritePolicy effectiveWritePolicy) {
+  private void deleteBlob(final BlobRef blobRef, @Nullable WritePolicy effectiveWritePolicy, final String reason) {
     checkNotNull(blobRef);
     if (effectiveWritePolicy != null && !effectiveWritePolicy.checkDeleteAllowed()) {
       throw new IllegalOperationException(
           "Repository does not allow deleting assets: " + bucket.getRepositoryName());
     }
-    blobTx.delete(blobRef);
+    blobTx.delete(blobRef, reason);
   }
 
   /**
@@ -744,7 +885,7 @@ public class StorageTxImpl
       return bucket;
     }
     else {
-      return bucketEntityAdapter.read.execute(db, repositoryName);
+      return bucketEntityAdapter.read(db, repositoryName);
     }
   }
 
@@ -765,7 +906,7 @@ public class StorageTxImpl
 
   private NumberSequence delaySequence() {
     return RandomExponentialSequence.builder()
-        .start(initialDelay) // start at 10ms
+        .start(INITIAL_DELAY_MS) // start at 10ms
         .factor(2) // delay an average of 100% longer, each time
         .maxDeviation(.5) // ±50%
         .build();

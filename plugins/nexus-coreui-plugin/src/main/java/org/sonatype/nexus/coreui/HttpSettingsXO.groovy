@@ -16,6 +16,8 @@ import javax.validation.constraints.Max
 import javax.validation.constraints.Min
 
 import org.sonatype.nexus.httpclient.config.NonProxyHosts
+import org.sonatype.nexus.validation.constraint.Hostname
+import org.sonatype.nexus.validation.constraint.PortNumber
 
 import groovy.transform.ToString
 
@@ -44,10 +46,10 @@ class HttpSettingsXO
 
   Boolean httpEnabled
 
+  @Hostname
   String httpHost
 
-  @Min(1L)
-  @Max(65535L)
+  @PortNumber
   Integer httpPort
 
   // HTTP proxy-authentication
@@ -66,10 +68,10 @@ class HttpSettingsXO
 
   Boolean httpsEnabled
 
+  @Hostname
   String httpsHost
 
-  @Min(1L)
-  @Max(65535L)
+  @PortNumber
   Integer httpsPort
 
   // HTTPS proxy-authentication

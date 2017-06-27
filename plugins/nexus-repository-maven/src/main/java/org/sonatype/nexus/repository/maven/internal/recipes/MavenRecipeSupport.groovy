@@ -34,10 +34,10 @@ import org.sonatype.nexus.repository.storage.StorageFacet
 import org.sonatype.nexus.repository.storage.UnitOfWorkHandler
 import org.sonatype.nexus.repository.view.ConfigurableViewFacet
 import org.sonatype.nexus.repository.view.Route.Builder
-import org.sonatype.nexus.repository.view.handlers.BrowseUnsupportedHandler
 import org.sonatype.nexus.repository.view.handlers.ConditionalRequestHandler
 import org.sonatype.nexus.repository.view.handlers.ContentHeadersHandler
 import org.sonatype.nexus.repository.view.handlers.ExceptionHandler
+import org.sonatype.nexus.repository.view.handlers.HandlerContributor
 import org.sonatype.nexus.repository.view.handlers.TimingHandler
 import org.sonatype.nexus.repository.view.matchers.ActionMatcher
 import org.sonatype.nexus.repository.view.matchers.logic.LogicMatchers
@@ -84,7 +84,7 @@ abstract class MavenRecipeSupport
   ContentHeadersHandler contentHeadersHandler
 
   @Inject
-  BrowseUnsupportedHandler browseUnsupportedHandler
+  HandlerContributor handlerContributor
 
   final MavenPathParser mavenPathParser
 
@@ -102,6 +102,7 @@ abstract class MavenRecipeSupport
         .handler(timingHandler)
         .handler(securityHandler)
         .handler(exceptionHandler)
+        .handler(handlerContributor)
         .handler(conditionalRequestHandler)
   }
 

@@ -17,10 +17,14 @@ import java.util.List;
 import javax.inject.Named;
 import javax.inject.Singleton;
 
+import org.sonatype.nexus.common.entity.EntityEvent;
 import org.sonatype.nexus.orient.OClassNameBuilder;
-import org.sonatype.nexus.orient.entity.EntityAdapter;
-import org.sonatype.nexus.orient.entity.action.SingletonActions;
+import org.sonatype.nexus.orient.entity.AttachedEntityMetadata;
+import org.sonatype.nexus.orient.entity.SingletonEntityAdapter;
 import org.sonatype.nexus.security.realm.RealmConfiguration;
+import org.sonatype.nexus.security.realm.RealmConfigurationCreatedEvent;
+import org.sonatype.nexus.security.realm.RealmConfigurationDeletedEvent;
+import org.sonatype.nexus.security.realm.RealmConfigurationUpdatedEvent;
 
 import com.orientechnologies.orient.core.metadata.schema.OClass;
 import com.orientechnologies.orient.core.metadata.schema.OType;
@@ -34,7 +38,7 @@ import com.orientechnologies.orient.core.record.impl.ODocument;
 @Named
 @Singleton
 public class RealmConfigurationEntityAdapter
-    extends EntityAdapter<RealmConfiguration>
+    extends SingletonEntityAdapter<RealmConfiguration>
 {
   private static final String DB_CLASS = new OClassNameBuilder()
       .type("realm")
@@ -68,9 +72,19 @@ public class RealmConfigurationEntityAdapter
     document.field(P_REALM_NAMES, entity.getRealmNames());
   }
 
-  //
-  // Actions
-  //
-
-  public final SingletonActions<RealmConfiguration> singleton = new SingletonActions<>(this);
+  @Override
+  public EntityEvent newEvent(final ODocument document, final EventKind eventKind) {
+    AttachedEntityMetadata metadata = new AttachedEntityMetadata(this, document);
+    log.debug("Emitted {} event with metadata {}", eventKind, metadata);
+    switch (eventKind) {
+      case CREATE:
+        return new RealmConfigurationCreatedEvent(metadata);
+      case UPDATE:
+        return new RealmConfigurationUpdatedEvent(metadata);
+      case DELETE:
+        return new RealmConfigurationDeletedEvent(metadata);
+      default:
+        return null;
+    }
+  }
 }

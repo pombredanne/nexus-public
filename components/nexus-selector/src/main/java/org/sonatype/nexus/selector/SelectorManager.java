@@ -12,17 +12,50 @@
  */
 package org.sonatype.nexus.selector;
 
+import java.util.List;
+
+import javax.annotation.Nullable;
+
+import org.sonatype.goodies.lifecycle.Lifecycle;
+import org.sonatype.nexus.common.entity.EntityId;
+
 /**
- * An interface for getting a {@link Selector} based on a name.
+ * Manages content selectors.
  *
- * @since 3.0
+ * since 3.1
  */
 public interface SelectorManager
+    extends Lifecycle
 {
   /**
-   *
-   * @param name of the selector
-   * @return selector
+   * Return all existing content selectors.
    */
-  Selector get(String name);
+  List<SelectorConfiguration> browse();
+
+  /**
+   * Read content selector by id.
+   */
+  @Nullable
+  SelectorConfiguration read(EntityId entityId);
+
+  /**
+   * Persist a new selector configuration.
+   */
+  void create(SelectorConfiguration configuration);
+
+  /**
+   * Persist an existing selector configuration.
+   */
+  void update(SelectorConfiguration configuration);
+
+  /**
+   * Delete an existing selector configuration.
+   */
+  void delete(SelectorConfiguration configuration);
+
+  /**
+   * Evaluate the specified content selector against the given variable source.
+   */
+  boolean evaluate(SelectorConfiguration selectorConfiguration, VariableSource variableSource)
+      throws SelectorEvaluationException;
 }

@@ -23,14 +23,18 @@ import javax.net.ssl.SSLContext;
 
 import org.sonatype.goodies.common.ComponentSupport;
 import org.sonatype.goodies.common.Mutex;
-import org.sonatype.nexus.common.event.EventBus;
+import org.sonatype.nexus.common.event.EventAware;
+import org.sonatype.nexus.common.event.EventConsumer;
+import org.sonatype.nexus.common.event.EventHelper;
+import org.sonatype.nexus.common.event.EventManager;
 import org.sonatype.nexus.email.EmailConfiguration;
 import org.sonatype.nexus.email.EmailConfigurationChangedEvent;
-import org.sonatype.nexus.email.EmailConfigurationStore;
 import org.sonatype.nexus.email.EmailManager;
 import org.sonatype.nexus.ssl.TrustStore;
 
 import com.google.common.annotations.VisibleForTesting;
+import com.google.common.base.Strings;
+import com.google.common.eventbus.Subscribe;
 import org.apache.commons.mail.Email;
 import org.apache.commons.mail.EmailConstants;
 import org.apache.commons.mail.EmailException;
@@ -47,9 +51,9 @@ import static com.google.common.base.Preconditions.checkNotNull;
 @Singleton
 public class EmailManagerImpl
     extends ComponentSupport
-    implements EmailManager
+    implements EmailManager, EventAware
 {
-  private final EventBus eventBus;
+  private final EventManager eventManager;
 
   private final EmailConfigurationStore store;
 
@@ -62,12 +66,12 @@ public class EmailManagerImpl
   private EmailConfiguration configuration;
 
   @Inject
-  public EmailManagerImpl(final EventBus eventBus,
+  public EmailManagerImpl(final EventManager eventManager,
                           final EmailConfigurationStore store,
                           final TrustStore trustStore,
                           @Named("initial") final Provider<EmailConfiguration> defaults)
   {
-    this.eventBus = checkNotNull(eventBus);
+    this.eventManager = checkNotNull(eventManager);
     this.store = checkNotNull(store);
     this.trustStore = checkNotNull(trustStore);
     this.defaults = checkNotNull(defaults);
@@ -123,15 +127,18 @@ public class EmailManagerImpl
     checkNotNull(configuration);
 
     EmailConfiguration model = configuration.copy();
-    // TODO: Validate configuration before saving?  Or leave to ext.direct?
 
     log.info("Saving configuration: {}", model);
+
+
     synchronized (lock) {
-      store.save(model);
+      if (!EventHelper.isReplicating()) {
+        store.save(model);
+      }
       this.configuration = model;
     }
 
-    eventBus.post(new EmailConfigurationChangedEvent(model));
+    eventManager.post(new EmailConfigurationChangedEvent(model));
   }
 
   //
@@ -145,7 +152,9 @@ public class EmailManagerImpl
   Email apply(final EmailConfiguration configuration, final Email mail) throws EmailException {
     mail.setHostName(configuration.getHost());
     mail.setSmtpPort(configuration.getPort());
-    mail.setAuthentication(configuration.getUsername(), configuration.getPassword());
+    if (!Strings.isNullOrEmpty(configuration.getUsername()) || !Strings.isNullOrEmpty(configuration.getPassword())) {
+      mail.setAuthentication(configuration.getUsername(), configuration.getPassword());
+    }
 
     mail.setStartTLSEnabled(configuration.isStartTlsEnabled());
     mail.setStartTLSRequired(configuration.isStartTlsRequired());
@@ -187,6 +196,9 @@ public class EmailManagerImpl
       Email prepared = apply(model, mail);
       prepared.send();
     }
+    else {
+      log.warn("No email enabled but asked to send anyway.");
+    }
   }
 
   @Override
@@ -200,5 +212,23 @@ public class EmailManagerImpl
     mail.setMsg("Verification successful");
     mail = apply(configuration, mail);
     mail.send();
+  }
+
+  @Subscribe
+  public void onStoreChanged(final EmailConfigurationEvent event) {
+    handleReplication(event, e -> setConfiguration(e.getEmailConfiguration()));
+  }
+
+  private void handleReplication(final EmailConfigurationEvent event,
+                                 final EventConsumer<EmailConfigurationEvent> consumer)
+  {
+    if (!event.isLocal()) {
+      try {
+        consumer.accept(event);
+      }
+      catch (Exception e) {
+        log.error("Failed to replicate: {}", event, e);
+      }
+    }
   }
 }

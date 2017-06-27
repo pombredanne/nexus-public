@@ -12,14 +12,20 @@
  */
 package org.sonatype.nexus.repository.maven.internal.group;
 
+import java.io.IOException;
+import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.List;
 
 import org.sonatype.goodies.testsupport.TestSupport;
+import org.sonatype.nexus.repository.Repository;
+import org.sonatype.nexus.repository.maven.MavenPath;
 import org.sonatype.nexus.repository.maven.internal.group.RepositoryMetadataMerger.Envelope;
+import org.sonatype.nexus.repository.view.Content;
 
 import com.google.common.base.Function;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
 import org.apache.maven.artifact.repository.metadata.Metadata;
@@ -28,7 +34,10 @@ import org.apache.maven.artifact.repository.metadata.Snapshot;
 import org.apache.maven.artifact.repository.metadata.SnapshotVersion;
 import org.apache.maven.artifact.repository.metadata.Versioning;
 import org.fest.util.Strings;
+import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.ExpectedException;
+import org.mockito.Mock;
 
 import static org.hamcrest.CoreMatchers.equalTo;
 import static org.hamcrest.CoreMatchers.notNullValue;
@@ -36,7 +45,9 @@ import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.containsInAnyOrder;
 import static org.hamcrest.Matchers.hasSize;
+import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.nullValue;
+import static org.mockito.Mockito.when;
 
 /**
  * UT for {@link RepositoryMetadataMerger}
@@ -46,6 +57,21 @@ import static org.hamcrest.Matchers.nullValue;
 public class RepositoryMetadataMergerTest
     extends TestSupport
 {
+  @Rule
+  public ExpectedException exception = ExpectedException.none();
+
+  @Mock
+  Path path;
+
+  @Mock
+  MavenPath mavenPath;
+
+  @Mock
+  Repository repository;
+
+  @Mock
+  Content content;
+
   private final RepositoryMetadataMerger merger = new RepositoryMetadataMerger();
 
   private Plugin plugin(String name) {
@@ -220,5 +246,43 @@ public class RepositoryMetadataMergerTest
       }
     }));
     assertThat(prefixes, containsInAnyOrder("foo-maven-plugin", "bar-maven-plugin"));
+  }
+
+  @Test
+  public void ioExceptionIncludesMetadataOrigin() throws Exception {
+    IOException cause = new IOException("original-message");
+
+    when(mavenPath.getPath()).thenReturn("/some/path");
+    when(repository.getName()).thenReturn("repository-name");
+    when(content.openInputStream()).thenThrow(cause);
+
+    exception.expectMessage("/some/path");
+    exception.expectMessage("repository-name");
+    exception.expectMessage("original-message");
+    exception.expectCause(is(cause));
+
+    merger.merge(path, mavenPath, ImmutableMap.of(repository, content));
+  }
+
+  /**
+   * NEXUS-13085
+   * Some maven-metadata.xml files are contrary to the present spec 
+   * (http://maven.apache.org/ref/3.3.9/maven-repository-metadata/repository-metadata.html) and contain a 'version' 
+   * element for non-SNAPSHOT artifacts, allowing for lax validation.
+   */
+  @Test
+  public void allowVersionInArtifactLevelMetadata() {
+    Metadata m1 = a("org.foo", "some-project", "20150324121500", "1.0.0","1.0.0", "1.0.0");
+    m1.setVersion("1.0.0");
+    Metadata m2 = a("org.foo", "some-project", "20150324121501", "1.0.1","1.0.1", "1.0.1");
+    m2.setVersion("1.0.1");
+
+    final Metadata m = merger.merge(
+        ImmutableList.of(new Envelope("1", m1), new Envelope("2", m2))
+    );
+    assertThat(m.getVersion(), is(m1.getVersion())); // target version is left intact, no attempt to merge
+    assertThat(m.getVersioning().getRelease(), is(m2.getVersion()));
+    assertThat(m.getVersioning().getLastUpdated(), is(m2.getVersioning().getLastUpdated()));
+    assertThat(m.getVersioning().getVersions(), contains("1.0.0", "1.0.1"));
   }
 }

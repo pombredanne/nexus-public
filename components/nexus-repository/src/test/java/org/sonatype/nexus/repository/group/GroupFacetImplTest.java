@@ -12,102 +12,137 @@
  */
 package org.sonatype.nexus.repository.group;
 
-import java.util.Arrays;
-import java.util.Collections;
-import java.util.LinkedHashSet;
-
 import javax.validation.ConstraintViolation;
 
 import org.sonatype.goodies.testsupport.TestSupport;
+import org.sonatype.nexus.repository.Format;
 import org.sonatype.nexus.repository.Repository;
+import org.sonatype.nexus.repository.config.Configuration;
+import org.sonatype.nexus.repository.config.ConfigurationFacet;
 import org.sonatype.nexus.repository.group.GroupFacetImpl.Config;
 import org.sonatype.nexus.repository.manager.RepositoryManager;
 import org.sonatype.nexus.repository.types.GroupType;
+import org.sonatype.nexus.repository.types.HostedType;
 import org.sonatype.nexus.validation.ConstraintViolationFactory;
 
+import com.google.common.collect.ImmutableSet;
 import org.junit.Before;
 import org.junit.Test;
+import org.mockito.Mock;
 
+import static com.google.common.collect.ImmutableList.copyOf;
+import static org.hamcrest.Matchers.contains;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertThat;
 import static org.mockito.Matchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.sonatype.nexus.repository.group.GroupFacetImpl.CONFIG_KEY;
 
 public class GroupFacetImplTest
     extends TestSupport
 {
-  private ConstraintViolationFactory constraintViolationFactory;
+  @Mock
+  private RepositoryManager repositoryManager;
+
+  @Mock
+  private ConfigurationFacet configurationFacet;
+
+  @Mock
+  private Format format = mock(Format.class);
 
   private GroupType groupType = new GroupType();
 
-  private RepositoryManager repositoryManager;
-
-  private GroupFacetImpl groupFacetImpl;
+  private GroupFacetImpl underTest;
 
   @Before
   public void setup() throws Exception {
-    repositoryManager = mock(RepositoryManager.class);
-    constraintViolationFactory = mock(ConstraintViolationFactory.class);
-    groupFacetImpl = new GroupFacetImpl(repositoryManager, constraintViolationFactory, groupType);
-
-    when(constraintViolationFactory.createViolation(anyString(), anyString())).thenReturn(mock(ConstraintViolation.class));
-
-    Repository repositoryUnderTest = mock(Repository.class);
-    Repository repository1 = mock(Repository.class);
-    Repository repository2 = mock(Repository.class);
-    Repository repository3 = mock(Repository.class);
-    GroupFacet groupFacet1 = mock(GroupFacet.class);
-    GroupFacet groupFacet2 = mock(GroupFacet.class);
-    GroupFacet groupFacet3 = mock(GroupFacet.class);
-    when(groupFacet1.members()).thenReturn(Collections.emptyList());
-    when(groupFacet2.members()).thenReturn(Arrays.asList(repository3));
-    when(groupFacet3.members()).thenReturn(Arrays.asList(repository1, repositoryUnderTest));
-    when(repositoryUnderTest.facet(GroupFacet.class)).thenReturn(groupFacetImpl);
-    when(repository1.facet(GroupFacet.class)).thenReturn(groupFacet1);
-    when(repository2.facet(GroupFacet.class)).thenReturn(groupFacet2);
-    when(repository3.facet(GroupFacet.class)).thenReturn(groupFacet3);
-    when(repositoryUnderTest.getType()).thenReturn(groupType);
-    when(repository1.getType()).thenReturn(groupType);
-    when(repository2.getType()).thenReturn(groupType);
-    when(repository3.getType()).thenReturn(groupType);
-    when(repositoryUnderTest.getName()).thenReturn("repositoryUnderTest");
-    when(repository1.getName()).thenReturn("repository1");
-    when(repository2.getName()).thenReturn("repository2");
-    when(repository3.getName()).thenReturn("repository3");
-
-    when(repositoryManager.get("repositoryUnderTest")).thenReturn(repositoryUnderTest);
-    when(repositoryManager.get("repository1")).thenReturn(repository1);
-    when(repositoryManager.get("repository2")).thenReturn(repository2);
-    when(repositoryManager.get("repository3")).thenReturn(repository3);
-
-    groupFacetImpl.attach(repositoryUnderTest);
+    underTest = new GroupFacetImpl(repositoryManager, makeConstraintViolationFactory(), groupType);
+    underTest.attach(makeRepositoryUnderTest());
   }
 
   @Test
   public void testDoValidate_pass() {
     Config config = new Config();
-    config.memberNames = new LinkedHashSet<>();
-    config.memberNames.add("repository1");
-    assertNull(groupFacetImpl.validateGroupDoesNotContainItself("repositoryUnderTest", config));
+    config.memberNames = ImmutableSet.of("repository1");
+    assertNull(underTest.validateGroupDoesNotContainItself("repositoryUnderTest", config));
   }
 
   @Test
-  public void testDoValidate_fail() {
-    //the group contains itself
+  public void testDoValidate_fail_group_contains_itself() {
     Config config = new Config();
-    config.memberNames = new LinkedHashSet<>();
-    config.memberNames.add("repositoryUnderTest");
-    assertNotNull(groupFacetImpl.validateGroupDoesNotContainItself("repositoryUnderTest", config));
+    config.memberNames = ImmutableSet.of("repositoryUnderTest");
+    assertNotNull(underTest.validateGroupDoesNotContainItself("repositoryUnderTest", config));
+  }
 
-    //the group contains a group that contains itself
-    config.memberNames = new LinkedHashSet<>();
-    config.memberNames.add("repository3");
-    assertNotNull(groupFacetImpl.validateGroupDoesNotContainItself("repositoryUnderTest", config));
+  @Test
+  public void testDoValidate_fail_group_contains_a_group_that_contains_itself() {
+    Config config = new Config();
+    config.memberNames = ImmutableSet.of("repository3");
+    assertNotNull(underTest.validateGroupDoesNotContainItself("repositoryUnderTest", config));
+  }
 
-    //the group contains a group, which contains a group, which contains itself
-    config.memberNames = new LinkedHashSet<>();
-    config.memberNames.add("repository2");
-    assertNotNull(groupFacetImpl.validateGroupDoesNotContainItself("repositoryUnderTest", config));
+  @Test
+  public void testDoValidate_fail_group_contains_a_group_which_contains_a_group_which_contains_itself() {
+    Config config = new Config();
+    config.memberNames = ImmutableSet.of("repository2");
+    assertNotNull(underTest.validateGroupDoesNotContainItself("repositoryUnderTest", config));
+  }
+
+  @Test
+  public void testLeafMembers() throws Exception {
+    Repository hosted1 = hostedRepository("hosted1");
+    Repository hosted2 = hostedRepository("hosted2");
+    Repository group1 = groupRepository("group1", hosted1);
+    Config config = new Config();
+    config.memberNames = ImmutableSet.of(hosted1.getName(), hosted2.getName(), group1.getName());
+    Configuration configuration = new Configuration();
+    configuration.attributes(CONFIG_KEY).set("memberNames", config.memberNames);
+    when(configurationFacet.readSection(configuration, CONFIG_KEY, Config.class)).thenReturn(config);
+    underTest.doConfigure(configuration);
+    assertThat(underTest.leafMembers(), contains(hosted1, hosted2));
+  }
+
+  private ConstraintViolationFactory makeConstraintViolationFactory() {
+    ConstraintViolationFactory constraintViolationFactory = mock(ConstraintViolationFactory.class);
+    when(constraintViolationFactory.createViolation(anyString(), anyString()))
+        .thenReturn(mock(ConstraintViolation.class));
+    return constraintViolationFactory;
+  }
+
+  private Repository makeRepositoryUnderTest() {
+    Repository repositoryUnderTest = groupRepository("repositoryUnderTest");
+    when(repositoryUnderTest.facet(GroupFacet.class)).thenReturn(underTest);
+    when(repositoryUnderTest.facet(ConfigurationFacet.class)).thenReturn(configurationFacet);
+
+    groupRepository("repository2",
+        groupRepository("repository3",
+            repositoryUnderTest,
+            groupRepository("repository1")
+        )
+    );
+    return repositoryUnderTest;
+  }
+
+  private Repository hostedRepository(final String name) {
+    Repository hostedRepository = mock(Repository.class);
+    when(hostedRepository.getType()).thenReturn(new HostedType());
+    when(hostedRepository.getName()).thenReturn(name);
+    when(hostedRepository.getFormat()).thenReturn(format);
+    when(repositoryManager.get(name)).thenReturn(hostedRepository);
+    return hostedRepository;
+  }
+
+  private Repository groupRepository(final String name, final Repository... repositories) {
+    Repository groupRepository = mock(Repository.class);
+    when(groupRepository.getType()).thenReturn(groupType);
+    when(groupRepository.getName()).thenReturn(name);
+    when(groupRepository.getFormat()).thenReturn(format);
+    when(repositoryManager.get(name)).thenReturn(groupRepository);
+    GroupFacet groupFacet = mock(GroupFacet.class);
+    when(groupRepository.facet(GroupFacet.class)).thenReturn(groupFacet);
+    when(groupFacet.members()).thenReturn(copyOf(repositories));
+    return groupRepository;
   }
 }

@@ -15,7 +15,6 @@ package org.sonatype.nexus.extender;
 import java.lang.management.ManagementFactory;
 import java.util.Dictionary;
 import java.util.EnumSet;
-import java.util.Enumeration;
 import java.util.HashSet;
 import java.util.Hashtable;
 import java.util.LinkedHashSet;
@@ -27,6 +26,8 @@ import javax.servlet.Filter;
 import javax.servlet.ServletContext;
 import javax.servlet.ServletContextEvent;
 import javax.servlet.ServletContextListener;
+
+import org.sonatype.nexus.common.app.ManagedLifecycleManager;
 
 import com.codahale.metrics.SharedMetricRegistries;
 import com.google.common.base.Splitter;
@@ -55,7 +56,6 @@ import org.osgi.framework.ServiceRegistration;
 import org.osgi.framework.SynchronousBundleListener;
 import org.osgi.framework.startlevel.BundleStartLevel;
 import org.osgi.framework.startlevel.FrameworkStartLevel;
-import org.osgi.service.cm.ManagedService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -75,7 +75,7 @@ import static org.sonatype.nexus.common.app.ManagedLifecycle.Phase.TASKS;
  * @since 3.0
  */
 public class NexusContextListener
-    implements ServletContextListener, ManagedService, FrameworkListener
+    implements ServletContextListener, FrameworkListener
 {
   /**
    * Start-level for the Nexus extender; this is distinct from the Karaf start-level (80).
@@ -116,7 +116,7 @@ public class NexusContextListener
 
   private Injector injector;
 
-  private NexusLifecycleManager lifecycleManager;
+  private ManagedLifecycleManager lifecycleManager;
 
   private ServiceRegistration<Filter> registration;
 
@@ -133,7 +133,7 @@ public class NexusContextListener
     bundleContext = extender.getBundleContext();
 
     servletContext = event.getServletContext();
-    Map<?, ?> servletProperties = (Map<?, ?>) servletContext.getAttribute("org.sonatype.nexus.cfg");
+    Map<?, ?> servletProperties = (Map<?, ?>) servletContext.getAttribute("nexus.properties");
     if (servletProperties == null) {
       servletProperties = System.getProperties();
     }
@@ -147,7 +147,7 @@ public class NexusContextListener
     extender.doStart(); // start tracking nexus bundles
 
     try {
-      lifecycleManager = injector.getInstance(NexusLifecycleManager.class);
+      lifecycleManager = injector.getInstance(ManagedLifecycleManager.class);
 
       lifecycleManager.to(LOGGING);
 
@@ -171,38 +171,13 @@ public class NexusContextListener
     }
     catch (final Exception e) {
       log.error("Failed to initialize context", e);
-      Throwables.propagate(e);
-    }
-  }
-
-  /**
-   * Receives property changes from OSGi and updates the bound {@code nexusProperties}.
-   */
-  @Override
-  public void updated(final Dictionary<String, ?> properties) {
-    if (properties != null) {
-      for (Enumeration<String> e = properties.keys(); e.hasMoreElements();) {
-        final String key = e.nextElement();
-        nexusProperties.put(key, properties.get(key));
-      }
-      System.getProperties().putAll(nexusProperties);
-    }
-
-    // post-wizard installation: apply the chosen configuration
-    String featureNames = (String) nexusProperties.get("nexus-features");
-    if (!Strings.isNullOrEmpty(featureNames) && lifecycleManager != null
-        && lifecycleManager.getCurrentPhase() == SECURITY) {
-      try {
-        installNexusFeatures(featureNames);
-      }
-      catch (final Exception e) {
-        log.error("Failed to update context", e);
-        Throwables.propagate(e);
-      }
+      Throwables.throwIfUnchecked(e);
+      throw new RuntimeException(e);
     }
   }
 
   @Override
+  @SuppressWarnings("finally")
   public void frameworkEvent(final FrameworkEvent event) {
     checkNotNull(event);
 
@@ -214,7 +189,17 @@ public class NexusContextListener
       }
       catch (final Exception e) {
         log.error("Failed to start nexus", e);
-        Throwables.propagate(e);
+        if (!HAS_PAX_EXAM) {
+          try {
+            // force container to shutdown early
+            bundleContext.getBundle(0).stop();
+          }
+          finally {
+            Throwables.throwIfUnchecked(e);
+            throw new RuntimeException(e); // NOSONAR
+          }
+        }
+        // otherwise let Pax-Exam handle shutdown
       }
 
       registerNexusFilter();

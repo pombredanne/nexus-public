@@ -12,14 +12,15 @@
  */
 package org.sonatype.nexus.repository.security;
 
-import javax.inject.Inject;
-
 import org.sonatype.nexus.repository.FacetSupport;
+import org.sonatype.nexus.repository.Repository;
 import org.sonatype.nexus.repository.config.Configuration;
 import org.sonatype.nexus.repository.http.HttpMethods;
 import org.sonatype.nexus.repository.view.Request;
 import org.sonatype.nexus.security.BreadActions;
-import org.sonatype.nexus.security.SecurityHelper;
+import org.sonatype.nexus.selector.VariableSource;
+
+import org.apache.shiro.authz.AuthorizationException;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 
@@ -28,30 +29,33 @@ import static com.google.common.base.Preconditions.checkNotNull;
  *
  * @since 3.0
  */
-public class SecurityFacetSupport
+public abstract class SecurityFacetSupport
     extends FacetSupport
     implements SecurityFacet
 {
-  private final SecurityHelper securityHelper;
+  private final RepositoryFormatSecurityContributor securityContributor;
 
-  private final RepositoryFormatSecurityConfigurationResource securityResource;
+  private final VariableResolverAdapter variableResolverAdapter;
 
-  @Inject
-  public SecurityFacetSupport(final SecurityHelper securityHelper,
-                              final RepositoryFormatSecurityConfigurationResource securityResource)
+  private final ContentPermissionChecker contentPermissionChecker;
+
+  public SecurityFacetSupport(final RepositoryFormatSecurityContributor securityContributor,
+                              final VariableResolverAdapter variableResolverAdapter,
+                              final ContentPermissionChecker contentPermissionChecker)
   {
-    this.securityHelper = checkNotNull(securityHelper);
-    this.securityResource = checkNotNull(securityResource);
+    this.securityContributor = checkNotNull(securityContributor);
+    this.variableResolverAdapter = checkNotNull(variableResolverAdapter);
+    this.contentPermissionChecker = checkNotNull(contentPermissionChecker);
   }
 
   @Override
   protected void doInit(final Configuration configuration) throws Exception {
-    securityResource.add(getRepository());
+    securityContributor.add(getRepository());
   }
 
   @Override
   protected void doDestroy() throws Exception {
-    securityResource.remove(getRepository());
+    securityContributor.remove(getRepository());
   }
 
   @Override
@@ -61,7 +65,12 @@ public class SecurityFacetSupport
     // determine permission action from request
     String action = action(request);
 
-    securityHelper.ensurePermitted(new RepositoryViewPermission(getRepository(), action));
+    Repository repo = getRepository();
+
+    VariableSource variableSource = variableResolverAdapter.fromRequest(request, getRepository());
+    if (!contentPermissionChecker.isPermitted(repo.getName(), repo.getFormat().getValue(), action, variableSource)) {
+      throw new AuthorizationException();
+    }
   }
 
   /**

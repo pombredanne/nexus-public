@@ -18,7 +18,10 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.util.Collections;
+import java.util.Set;
 import java.util.zip.GZIPInputStream;
+import java.util.stream.Collectors;
 
 import org.sonatype.goodies.common.ComponentSupport;
 
@@ -29,6 +32,8 @@ import com.orientechnologies.orient.core.db.tool.ODatabaseImport;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
+import static org.sonatype.nexus.orient.DatabaseManagerSupport.SYSTEM_PASSWORD;
+import static org.sonatype.nexus.orient.DatabaseManagerSupport.SYSTEM_USER;
 
 /**
  * Default {@link DatabaseExternalizer} implementation.
@@ -95,24 +100,39 @@ public class DatabaseExternalizerImpl
   }
 
   @Override
-  public void restore(final InputStream input) throws IOException {
+  public void restore(final InputStream input, final boolean overwrite) throws IOException {
     checkNotNull(input);
 
     log.debug("Restoring database: {}", name);
 
     try (ODatabaseDocumentTx db = openDb()) {
-      checkState(!db.exists(), "Database already exists: %s", name);
-      db.create();
+      if (db.exists()) {
+        checkState(overwrite, "Database already exists: %s", name);
+      }
+      else {
+        db.create();
+      }
 
       log.debug("Starting restore");
       db.restore(input, null, null, new LoggingCommandOutputListener("RESTORE"));
-      log.debug("Completed import");
+      log.debug("Completed restore");
+
+      if (db.getStorage().isClosed()) {
+        // restore can leave storage layer closed, so re-open it
+        db.getStorage().open(SYSTEM_USER, SYSTEM_PASSWORD, null);
+      }
     }
   }
 
   @Override
   public void export(final OutputStream output) throws IOException {
+    export(output, Collections.emptySet());
+  }
+
+  @Override
+  public void export(final OutputStream output, final Set<String> excludedClassNames) throws IOException {
     checkNotNull(output);
+    checkNotNull(excludedClassNames);
 
     log.debug("Exporting database: {}", name);
 
@@ -121,20 +141,34 @@ public class DatabaseExternalizerImpl
 
       log.debug("Starting export");
       ODatabaseExport exporter = new ODatabaseExport(db, output, new LoggingCommandOutputListener("EXPORT"));
+
+      if (!excludedClassNames.isEmpty()) {
+        // orientdb maps to classnames to uppercase
+        Set<String> upperCasedExcludedClassNames = excludedClassNames.stream()
+            .map(String::toUpperCase)
+            .collect(Collectors.toSet());
+        log.debug("excluding : {}", upperCasedExcludedClassNames);
+        exporter.setExcludeClasses(upperCasedExcludedClassNames);
+      }
+
       exporter.exportDatabase();
       log.debug("Completed export");
     }
   }
 
   @Override
-  public void import_(final InputStream input) throws IOException {
+  public void import_(final InputStream input, final boolean overwrite) throws IOException {
     checkNotNull(input);
 
     log.debug("Importing database: {}", name);
 
     try (ODatabaseDocumentTx db = openDb()) {
-      checkState(!db.exists(), "Database already exists: %s", name);
-      db.create();
+      if (db.exists()) {
+        checkState(overwrite, "Database already exists: %s", name);
+      }
+      else {
+        db.create();
+      }
 
       import_(db, input);
     }

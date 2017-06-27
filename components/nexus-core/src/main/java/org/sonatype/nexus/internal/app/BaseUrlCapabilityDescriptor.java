@@ -26,7 +26,7 @@ import org.sonatype.nexus.capability.CapabilityType;
 import org.sonatype.nexus.capability.Tag;
 import org.sonatype.nexus.capability.Taggable;
 import org.sonatype.nexus.formfields.FormField;
-import org.sonatype.nexus.formfields.StringTextFormField;
+import org.sonatype.nexus.formfields.UrlFormField;
 
 import com.google.common.collect.ImmutableList;
 
@@ -57,7 +57,7 @@ public class BaseUrlCapabilityDescriptor
     @DefaultMessage("URL")
     String urlLabel();
 
-    @DefaultMessage("Base URL of the application server")
+    @DefaultMessage("Reverse proxy base URL")
     String urlHelp();
   }
 
@@ -67,7 +67,7 @@ public class BaseUrlCapabilityDescriptor
 
   public BaseUrlCapabilityDescriptor() {
     this.formFields = ImmutableList.of(
-        (FormField)new StringTextFormField(
+        (FormField)new UrlFormField(
             BaseUrlCapabilityConfiguration.URL,
             messages.urlLabel(),
             messages.urlHelp(),

@@ -102,8 +102,6 @@ public interface SecurityConfigurationManager
    */
   void deleteRole(String id) throws NoSuchRoleException;
 
-  void cleanRemovedRole(String roleId);
-
   //
   // Privileges
   //
@@ -133,8 +131,6 @@ public interface SecurityConfigurationManager
    */
   void deletePrivilege(String id) throws NoSuchPrivilegeException;
 
-  void cleanRemovedPrivilege(String privilegeId);
-
   //
   // User-role mapping
   //
@@ -148,4 +144,5 @@ public interface SecurityConfigurationManager
   List<CUserRoleMapping> listUserRoleMappings();
 
   void deleteUserRoleMapping(String userId, String source) throws NoSuchRoleMappingException;
+
 }

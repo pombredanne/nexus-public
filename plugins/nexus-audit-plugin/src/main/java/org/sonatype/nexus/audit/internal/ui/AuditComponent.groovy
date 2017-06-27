@@ -12,20 +12,21 @@
  */
 package org.sonatype.nexus.audit.internal.ui
 
-import javax.annotation.Nullable
 import javax.inject.Inject
 import javax.inject.Named
 import javax.inject.Singleton
 
 import org.sonatype.nexus.audit.AuditData
 import org.sonatype.nexus.audit.AuditRecorder
-import org.sonatype.nexus.audit.AuditStore
+import org.sonatype.nexus.audit.internal.AuditStore
 import org.sonatype.nexus.extdirect.DirectComponent
 import org.sonatype.nexus.extdirect.DirectComponentSupport
 import org.sonatype.nexus.extdirect.model.PagedResponse
 import org.sonatype.nexus.extdirect.model.StoreLoadParameters
 import org.sonatype.nexus.rapture.StateContributor
 
+import com.codahale.metrics.annotation.ExceptionMetered
+import com.codahale.metrics.annotation.Timed
 import com.softwarementors.extjs.djn.config.annotations.DirectAction
 import com.softwarementors.extjs.djn.config.annotations.DirectMethod
 import org.apache.shiro.authz.annotation.RequiresAuthentication
@@ -50,6 +51,8 @@ class AuditComponent
   AuditRecorder auditRecorder
 
   @DirectMethod
+  @Timed
+  @ExceptionMetered
   @RequiresPermissions('nexus:audit:read')
   PagedResponse<AuditData> read(final StoreLoadParameters parameters) {
     List<AuditData> data = read(parameters.start, parameters.limit)
@@ -57,35 +60,17 @@ class AuditComponent
   }
 
   @RequiresPermissions('nexus:audit:read')
-  List<AuditData> read(final long start, final @Nullable Long limit) {
+  List<AuditData> read(final long start, final long limit) {
     log.debug "Listing audit records; start=$start limit=$limit"
-
-    List<AuditData> result = []
-    def count = 0
-
-    def entries = null
-    try {
-      entries = auditStore.browse(start, limit)
-
-      for (AuditData data : entries) {
-        result << data
-        count++
-        if (limit != null && limit > 0 && count >= limit) {
-          break
-        }
-      }
-    }
-    finally {
-      entries?.close()
-    }
-
-    return result
+    return auditStore.browse(start, limit)
   }
 
   /**
    * Clear all audit data.
    */
   @DirectMethod
+  @Timed
+  @ExceptionMetered
   @RequiresAuthentication
   @RequiresPermissions('nexus:audit:delete')
   void clear() {

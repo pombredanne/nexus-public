@@ -12,9 +12,9 @@
  */
 package org.sonatype.nexus.repository.storage;
 
+import org.sonatype.nexus.common.entity.EntityCreatedEvent;
 import org.sonatype.nexus.common.entity.EntityId;
 import org.sonatype.nexus.common.entity.EntityMetadata;
-import org.sonatype.nexus.orient.entity.EntityCreatedEvent;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 

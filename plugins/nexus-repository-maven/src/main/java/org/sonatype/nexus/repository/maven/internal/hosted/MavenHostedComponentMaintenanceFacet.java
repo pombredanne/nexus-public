@@ -21,14 +21,12 @@ import org.sonatype.nexus.repository.storage.ComponentMaintenance;
 import org.sonatype.nexus.repository.storage.DefaultComponentMaintenanceImpl;
 import org.sonatype.nexus.repository.storage.StorageFacet;
 import org.sonatype.nexus.repository.storage.StorageTx;
+import org.sonatype.nexus.transaction.Transactional;
 import org.sonatype.nexus.transaction.UnitOfWork;
-
-import com.orientechnologies.common.concur.ONeedRetryException;
 
 import static org.sonatype.nexus.repository.maven.internal.Attributes.P_ARTIFACT_ID;
 import static org.sonatype.nexus.repository.maven.internal.Attributes.P_BASE_VERSION;
 import static org.sonatype.nexus.repository.maven.internal.Attributes.P_GROUP_ID;
-import static org.sonatype.nexus.transaction.Operations.transactional;
 
 /**
  * maven format specific hosted {@link ComponentMaintenance}.
@@ -41,11 +39,11 @@ public class MavenHostedComponentMaintenanceFacet
 {
   @Override
   public void deleteComponent(final EntityId componentId) {
-    String[] coordinates = transactional(getRepository().facet(StorageFacet.class).txSupplier())
-        .retryOn(IllegalStateException.class).swallow(ONeedRetryException.class)
+    String[] coordinates = Transactional.operation
+        .withDb(getRepository().facet(StorageFacet.class).txSupplier())
         .call(() -> {
           final StorageTx tx = UnitOfWork.currentTx();
-          Component component = tx.findComponent(componentId, tx.findBucket(getRepository()));
+          Component component = tx.findComponentInBucket(componentId, tx.findBucket(getRepository()));
           if (component != null) {
             return new String[]{
                 component.formatAttributes().get(P_GROUP_ID, String.class),
@@ -57,7 +55,8 @@ public class MavenHostedComponentMaintenanceFacet
         });
     super.deleteComponent(componentId);
     if (coordinates != null) {
-      getRepository().facet(MavenHostedFacet.class).deleteMetadata(coordinates[0], coordinates[1], coordinates[2]);
+      getRepository().facet(MavenHostedFacet.class)
+          .deleteMetadata(coordinates[0], coordinates[1], coordinates[2]);
     }
   }
 }

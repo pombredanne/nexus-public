@@ -21,17 +21,22 @@ import javax.inject.Named;
 import javax.inject.Provider;
 import javax.inject.Singleton;
 
+import org.sonatype.nexus.common.app.ManagedLifecycle;
 import org.sonatype.nexus.common.stateguard.Guarded;
 import org.sonatype.nexus.common.stateguard.StateGuardLifecycleSupport;
 import org.sonatype.nexus.orient.DatabaseInstance;
+import org.sonatype.nexus.orient.DatabaseInstanceNames;
 import org.sonatype.nexus.script.Script;
-import org.sonatype.nexus.script.ScriptStore;
+import org.sonatype.nexus.script.plugin.internal.ScriptStore;
 
-import com.google.common.collect.Lists;
+import com.google.common.collect.ImmutableList;
 import com.orientechnologies.orient.core.db.document.ODatabaseDocumentTx;
 
 import static com.google.common.base.Preconditions.checkNotNull;
+import static org.sonatype.nexus.common.app.ManagedLifecycle.Phase.SCHEMAS;
 import static org.sonatype.nexus.common.stateguard.StateGuardLifecycleSupport.State.STARTED;
+import static org.sonatype.nexus.orient.transaction.OrientTransactional.inTx;
+import static org.sonatype.nexus.orient.transaction.OrientTransactional.inTxRetry;
 
 /**
  * Default {@link ScriptStore} implementation. 
@@ -39,6 +44,7 @@ import static org.sonatype.nexus.common.stateguard.StateGuardLifecycleSupport.St
  * @since 3.0
  */
 @Named
+@ManagedLifecycle(phase = SCHEMAS)
 @Singleton
 public class ScriptStoreImpl
     extends StateGuardLifecycleSupport
@@ -49,7 +55,7 @@ public class ScriptStoreImpl
   private final ScriptEntityAdapter entityAdapter;
   
   @Inject
-  public ScriptStoreImpl(@Named("config") final Provider<DatabaseInstance> databaseInstance,
+  public ScriptStoreImpl(@Named(DatabaseInstanceNames.CONFIG) final Provider<DatabaseInstance> databaseInstance,
                          final ScriptEntityAdapter entityAdapter)
   {
     this.databaseInstance = checkNotNull(databaseInstance);
@@ -66,9 +72,7 @@ public class ScriptStoreImpl
   @Override
   @Guarded(by = STARTED)
   public List<Script> list() {
-    try (ODatabaseDocumentTx db = openDb()) {
-      return Lists.newArrayList(entityAdapter.browse.execute(db));
-    }
+    return inTx(databaseInstance).call(db -> ImmutableList.copyOf(entityAdapter.browse(db)));
   }
 
   @Nullable
@@ -87,9 +91,7 @@ public class ScriptStoreImpl
   public void create(final Script script) {
     checkNotNull(script);
 
-    try (ODatabaseDocumentTx db = openDb()) {
-      entityAdapter.addEntity(db, script);
-    }
+    inTxRetry(databaseInstance).run(db -> entityAdapter.addEntity(db, script));
   }
 
   @Override
@@ -97,9 +99,7 @@ public class ScriptStoreImpl
   public void update(final Script script) {
     checkNotNull(script);
 
-    try (ODatabaseDocumentTx db = openDb()) {
-      entityAdapter.editEntity(db, script);
-    }
+    inTxRetry(databaseInstance).run(db -> entityAdapter.editEntity(db, script));
   }
 
   @Override
@@ -107,13 +107,7 @@ public class ScriptStoreImpl
   public void delete(final Script script) {
     checkNotNull(script);
 
-    try (ODatabaseDocumentTx db = openDb()) {
-      entityAdapter.deleteEntity(db, script);
-    }
-  }
-
-  private ODatabaseDocumentTx openDb() {
-    return databaseInstance.get().acquire();
+    inTxRetry(databaseInstance).run(db -> entityAdapter.deleteEntity(db, script));
   }
 
 }

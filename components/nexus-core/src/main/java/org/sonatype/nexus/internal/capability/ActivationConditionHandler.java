@@ -19,9 +19,7 @@ import org.sonatype.nexus.capability.CapabilityContextAware;
 import org.sonatype.nexus.capability.Condition;
 import org.sonatype.nexus.capability.ConditionEvent;
 import org.sonatype.nexus.capability.condition.Conditions;
-import org.sonatype.nexus.capability.condition.SatisfiedCondition;
-import org.sonatype.nexus.capability.condition.UnsatisfiedCondition;
-import org.sonatype.nexus.common.event.EventBus;
+import org.sonatype.nexus.common.event.EventManager;
 
 import com.google.common.eventbus.AllowConcurrentEvents;
 import com.google.common.eventbus.Subscribe;
@@ -38,7 +36,7 @@ public class ActivationConditionHandler
     extends ComponentSupport
 {
 
-  private final EventBus eventBus;
+  private final EventManager eventManager;
 
   private final DefaultCapabilityReference reference;
 
@@ -47,11 +45,11 @@ public class ActivationConditionHandler
   private Condition activationCondition;
 
   @Inject
-  ActivationConditionHandler(final EventBus eventBus,
+  ActivationConditionHandler(final EventManager eventManager,
                              final Conditions conditions,
                              @Assisted final DefaultCapabilityReference reference)
   {
-    this.eventBus = checkNotNull(eventBus);
+    this.eventManager = checkNotNull(eventManager);
     this.conditions = checkNotNull(conditions);
     this.reference = checkNotNull(reference);
   }
@@ -81,7 +79,7 @@ public class ActivationConditionHandler
       try {
         Condition capabilityActivationCondition = reference.capability().activationCondition();
         if (capabilityActivationCondition == null) {
-          capabilityActivationCondition = new SatisfiedCondition("Capability has no activation condition");
+          capabilityActivationCondition = conditions.always("Capability has no activation condition");
         }
         activationCondition = conditions.logical().and(
             capabilityActivationCondition,
@@ -93,21 +91,21 @@ public class ActivationConditionHandler
         }
       }
       catch (Exception e) {
-        activationCondition = new UnsatisfiedCondition("Failed to determine activation condition");
+        activationCondition = conditions.never("Failed to determine activation condition");
         log.error(
             "Could not get activation condition from capability {} ({}). Considering it as non activatable",
             reference.capability(), reference.context().id(), e
         );
       }
       activationCondition.bind();
-      eventBus.register(this);
+      eventManager.register(this);
     }
     return this;
   }
 
   ActivationConditionHandler release() {
     if (activationCondition != null) {
-      eventBus.unregister(this);
+      eventManager.unregister(this);
       activationCondition.release();
       activationCondition = null;
     }

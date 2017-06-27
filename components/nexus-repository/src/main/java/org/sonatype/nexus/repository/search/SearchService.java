@@ -12,12 +12,15 @@
  */
 package org.sonatype.nexus.repository.search;
 
+import java.util.Collection;
 import java.util.List;
 
 import javax.annotation.Nullable;
 
 import org.sonatype.nexus.repository.Repository;
+import org.sonatype.nexus.repository.storage.Component;
 
+import com.google.common.base.Function;
 import org.elasticsearch.action.search.SearchResponse;
 import org.elasticsearch.index.query.QueryBuilder;
 import org.elasticsearch.search.SearchHit;
@@ -52,28 +55,81 @@ public interface SearchService
   void put(Repository repository, String identifier, String json);
 
   /**
+   * Operation used for bulk updating of component index.
+   *
+   * @param repository the source repository
+   * @param components an {@link Iterable} of components to index
+   * @param identifierProducer a function producing an identifier for a component (never returning null)
+   * @param jsonDocumentProducer a function producing a json document for the component (never returning null)
+   *
+   * @since 3.4
+   */
+  void bulkPut(Repository repository, Iterable<Component> components,
+               Function<Component, String> identifierProducer,
+               Function<Component, String> jsonDocumentProducer);
+
+  /**
    * Removes data with given identifier from index of given repository.
    */
   void delete(Repository repository, String identifier);
 
   /**
-   * Search component metadata and browse results.
+   * Operation used for bulk removal of data from index of given repository.
+   *
+   * @param repository the source repository (if known)
+   * @param identifiers the ids of documents to remove
+   *
+   * @since 3.4
    */
-  Iterable<SearchHit> browse(QueryBuilder query);
+  void bulkDelete(@Nullable Repository repository, Iterable<String> identifiers);
 
   /**
-   * Search component metadata and browse results (paged).
+   * Search component metadata and browse results, without the effect of content selectors.
+   *
+   * @since 3.1
    */
-  Iterable<SearchHit> browse(QueryBuilder query, int from, int size);
+  Iterable<SearchHit> browseUnrestricted(QueryBuilder query);
 
   /**
-   * Search component metadata and browse results (paged).
+   * Search component metadata in a specified repository and browse results, without the effect of content selectors
+   *
+   * @since 3.4
+   */
+  Iterable<SearchHit> browseUnrestrictedInRepos(QueryBuilder query, Collection<String> repoNames);
+
+  /**
+   * Search component metadata and browse results (paged), without the effect of content selectors.
+   *
+   * @since 3.1
+   */
+  Iterable<SearchHit> browseUnrestricted(QueryBuilder query, int from, int size);
+
+  /**
+   * Search component metadata and browse results (paged), without the effect of content selectors.
+   *
+   * @since 3.1
+   */
+  SearchResponse searchUnrestricted(QueryBuilder query, @Nullable List<SortBuilder> sort, int from, int size);
+
+  /**
+   * Search component metadata and browse results (paged) with content selectors applied.
+   *
+   * @since 3.1
    */
   SearchResponse search(QueryBuilder query, @Nullable List<SortBuilder> sort, int from, int size);
 
   /**
-   * Count the number of results for a given query
+   * Count the number of results for a given query, without the effect of content selectors.
+   *
+   * @since 3.1
    */
-  long count(QueryBuilder query);
+  long countUnrestricted(QueryBuilder query);
+
+  /**
+   * Flush any pending bulk index requests.
+   *
+   * @since 3.4
+   */
+  void flush();
 
 }

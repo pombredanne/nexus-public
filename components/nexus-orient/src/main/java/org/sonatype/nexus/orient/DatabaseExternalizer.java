@@ -15,6 +15,7 @@ package org.sonatype.nexus.orient;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.util.Set;
 
 /**
  * Database externalizer.
@@ -41,7 +42,18 @@ public interface DatabaseExternalizer
    *
    * @see #backup(OutputStream)
    */
-  void restore(InputStream input) throws IOException;
+  default void restore(InputStream input) throws IOException {
+    restore(input, false);
+  }
+
+  /**
+   * Restore database.
+   *
+   * @see #backup(OutputStream)
+   * 
+   * @since 3.1
+   */
+  void restore(InputStream input, boolean overwrite) throws IOException;
 
   //
   // Export and Import
@@ -65,9 +77,25 @@ public interface DatabaseExternalizer
   void export(OutputStream output) throws IOException;
 
   /**
+   * Export database, excluding specified classes.  Output format is a JSON file.
+   */
+  void export(OutputStream output, Set<String> excludedClassNames) throws IOException;
+
+  /**
    * Import database.
    *
    * @see #export(OutputStream)
    */
-  void import_(InputStream input) throws IOException;
+  default void import_(InputStream input) throws IOException {
+    import_(input, false);
+  }
+
+  /**
+   * Import database.
+   *
+   * @see #export(OutputStream)
+   * 
+   * @since 3.1
+   */
+  void import_(InputStream input, boolean overwrite) throws IOException;
 }

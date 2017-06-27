@@ -12,15 +12,18 @@
  */
 package org.sonatype.nexus.orient.entity;
 
+import java.util.Objects;
+
 import javax.annotation.Nullable;
 
 import org.sonatype.nexus.common.entity.Entity;
+import org.sonatype.nexus.common.entity.EntityId;
 import org.sonatype.nexus.orient.entity.action.BrowseEntitiesAction;
 import org.sonatype.nexus.orient.entity.action.CountDocumentsAction;
 import org.sonatype.nexus.orient.entity.action.ReadEntityByIdAction;
 
-import com.google.common.base.Function;
 import com.google.common.collect.Iterables;
+import com.orientechnologies.orient.core.db.document.ODatabaseDocumentTx;
 import com.orientechnologies.orient.core.record.impl.ODocument;
 
 /**
@@ -31,31 +34,79 @@ import com.orientechnologies.orient.core.record.impl.ODocument;
 public abstract class IterableEntityAdapter<T extends Entity>
     extends EntityAdapter<T>
 {
+  protected final ReadEntityByIdAction<T> read = new ReadEntityByIdAction<>(this);
+
+  protected final BrowseEntitiesAction<T> browse = new BrowseEntitiesAction<>(this);
+
+  protected final CountDocumentsAction count = new CountDocumentsAction(this);
+
   public IterableEntityAdapter(final String typeName) {
     super(typeName);
   }
 
   /**
-   * Transform documents into entities.
+   * Transform documents into entities for browsing. Malformed/null documents are logged and skipped over.
    */
   public Iterable<T> transform(final Iterable<ODocument> documents) {
-    return Iterables.transform(documents, new Function<ODocument, T>()
-    {
-      @Nullable
-      @Override
-      public T apply(@Nullable final ODocument input) {
-        return input != null ? readEntity(input) : null;
+    return Iterables.filter(Iterables.transform(documents, this::transformEntity), Objects::nonNull);
+  }
+
+  /**
+   * Transform document into entity for browsing. Malformed documents are logged and mapped to {@code null}.
+   *
+   * @since 3.3
+   */
+  @Nullable
+  protected T transformEntity(@Nullable final ODocument document) {
+    if (document != null) {
+      try {
+        return readEntity(document);
       }
-    });
+      catch (Exception | LinkageError e) {
+        if (log.isDebugEnabled()) {
+          log.error("Skipping malformed entity: {}", document, e);
+        }
+        else {
+          log.error("Skipping malformed entity: {} cause: {}", document, e.toString());
+        }
+      }
+    }
+    else {
+      log.debug("Skipping null entity");
+    }
+    return null;
   }
 
   //
   // Actions
   //
 
-  public final ReadEntityByIdAction<T> read = new ReadEntityByIdAction<>(this);
+  /**
+   * @since 3.1
+   */
+  @Nullable
+  public T read(final ODatabaseDocumentTx db, final EntityId id) {
+    return read.execute(db, id);
+  }
 
-  public final BrowseEntitiesAction<T> browse = new BrowseEntitiesAction<>(this);
+  /**
+   * @since 3.1
+   */
+  public Iterable<T> browse(final ODatabaseDocumentTx db) {
+    return browse.execute(db);
+  }
 
-  public final CountDocumentsAction count = new CountDocumentsAction(this);
+  /**
+   * @since 3.1
+   */
+  public long count(final ODatabaseDocumentTx db) {
+    return count.execute(db);
+  }
+
+  /**
+   * @since 3.1
+   */
+  public int countI(final ODatabaseDocumentTx db) {
+    return count.executeI(db);
+  }
 }

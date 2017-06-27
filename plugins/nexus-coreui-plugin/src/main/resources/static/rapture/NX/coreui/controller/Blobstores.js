@@ -44,6 +44,7 @@ Ext.define('NX.coreui.controller.Blobstores', {
   ],
   refs: [
     { ref: 'feature', selector: 'nx-coreui-blobstore-feature' },
+    { ref: 'content', selector: 'nx-feature-content' },
     { ref: 'list', selector: 'nx-coreui-blobstore-list' },
     { ref: 'settings', selector: 'nx-coreui-blobstore-feature nx-coreui-blobstore-settings' }
   ],
@@ -53,20 +54,7 @@ Ext.define('NX.coreui.controller.Blobstores', {
       variants: ['x16', 'x32']
     }
   },
-  features: {
-    mode: 'admin',
-    path: '/Repository/Blobstores',
-    text: NX.I18n.get('Blobstores_Text'),
-    description: NX.I18n.get('Blobstores_Description'),
-    view: { xtype: 'nx-coreui-blobstore-feature' },
-    iconConfig: {
-      file: 'drive_network.png',
-      variants: ['x16', 'x32']
-    },
-    visible: function() {
-      return NX.Permissions.check('nexus:blobstores:read') && NX.State.getUser();
-    }
-  },
+
   permission: 'nexus:blobstores',
 
   /**
@@ -74,6 +62,21 @@ Ext.define('NX.coreui.controller.Blobstores', {
    */
   init: function() {
     var me = this;
+
+    me.features = {
+      mode: 'admin',
+      path: '/Repository/Blobstores',
+      text: NX.I18n.get('Blobstores_Text'),
+      description: NX.I18n.get('Blobstores_Description'),
+      view: {xtype: 'nx-coreui-blobstore-feature'},
+      iconConfig: {
+        file: 'drive_network.png',
+        variants: ['x16', 'x32']
+      },
+      visible: function() {
+        return NX.Permissions.check('nexus:blobstores:read') && NX.State.getUser();
+      }
+    };
 
     me.callParent();
 
@@ -122,11 +125,20 @@ Ext.define('NX.coreui.controller.Blobstores', {
    * @override
    */
   bindDeleteButton: function (button) {
+    var me = this;
     button.mon(
       NX.Conditions.and(
         NX.Conditions.isPermitted(this.permission + ':delete'),
         NX.Conditions.gridHasSelection('nx-coreui-blobstore-list', function(model) {
-          return !model.get('inUse');
+          var repositoryUseCount = model.get('repositoryUseCount');
+          if (repositoryUseCount > 0) {
+            me.showInfo(NX.I18n.format('Blobstore_BlobstoreFeature_Delete_Disabled_Message',
+                Ext.util.Format.plural(repositoryUseCount, 'repository', 'repositories')));
+          }
+          else {
+            me.clearInfo();
+          }
+          return !repositoryUseCount > 0;
         })
       ),
       {
@@ -167,7 +179,9 @@ Ext.define('NX.coreui.controller.Blobstores', {
     var me = this,
         description = me.getDescription(model);
 
+    me.getContent().getEl().mask(NX.I18n.get('Blobstores_Delete_Mask'));
     NX.direct.coreui_Blobstore.remove(model.getId(), function(response) {
+      me.getContent().getEl().unmask();
       me.getStore('Blobstore').load();
       if (Ext.isObject(response) && response.success) {
         NX.Messages.add({ text: 'Blobstore deleted: ' + description, type: 'success' });

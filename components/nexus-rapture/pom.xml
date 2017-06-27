@@ -20,7 +20,7 @@
   <parent>
     <groupId>org.sonatype.nexus</groupId>
     <artifactId>nexus-components</artifactId>
-    <version>3.1.0-SNAPSHOT</version>
+    <version>3.4.0-SNAPSHOT</version>
   </parent>
 
   <artifactId>nexus-rapture</artifactId>
@@ -29,7 +29,10 @@
 
   <properties>
     <sonar.sources>src/main/java,src/main/resources/static/rapture</sonar.sources>
-    <sonar.exclusions>src/main/resources/static/rapture/baseapp-*.js</sonar.exclusions>
+    <sonar.exclusions>
+      src/main/resources/static/rapture/baseapp-*.js,
+      src/main/resources/static/rapture/d3.v4.min.js
+    </sonar.exclusions>
   </properties>
 
   <dependencies>
@@ -41,6 +44,11 @@
     <dependency>
       <groupId>org.sonatype.nexus</groupId>
       <artifactId>nexus-capability</artifactId>
+    </dependency>
+
+    <dependency>
+      <groupId>org.sonatype.nexus</groupId>
+      <artifactId>nexus-orient</artifactId>
     </dependency>
 
     <dependency>
@@ -71,8 +79,14 @@
           <namespace>NX</namespace>
           <excludes>
             <exclude>baseapp-*.js</exclude>
+            <exclude>d3.v4.min.js</exclude>
           </excludes>
         </configuration>
+      </plugin>
+
+      <plugin>
+        <groupId>com.github.klieber</groupId>
+        <artifactId>phantomjs-maven-plugin</artifactId>
       </plugin>
 
       <plugin>
@@ -93,6 +107,35 @@
             </configuration>
           </execution>
         </executions>
+      </plugin>
+      <plugin>
+        <groupId>com.github.searls</groupId>
+        <artifactId>jasmine-maven-plugin</artifactId>
+        <configuration>
+          <preloadSources>
+            <source>baseapp-debug.js</source>
+            <source>NX-test.js</source>
+          </preloadSources>
+          <sourceIncludes>
+            <include>**/*.js</include>
+          </sourceIncludes>
+          <sourceExcludes>
+            <exclude>**/baseapp-*.js</exclude>
+          </sourceExcludes>
+          <specIncludes>
+            <include>**/*-spec.js</include>
+          </specIncludes>
+          <jsSrcDir>${project.basedir}/src/main/resources/static/rapture</jsSrcDir>
+          <jsTestSrcDir>${project.basedir}/src/test/resources/jasmine</jsTestSrcDir>
+          <keepServerAlive>true</keepServerAlive>
+          <webDriverClassName>org.openqa.selenium.phantomjs.PhantomJSDriver</webDriverClassName>
+          <webDriverCapabilities>
+            <capability>
+              <name>phantomjs.binary.path</name>
+              <value>${phantomjs.binary}</value>
+            </capability>
+          </webDriverCapabilities>
+        </configuration>
       </plugin>
     </plugins>
   </build>
@@ -155,8 +198,8 @@
         <defaultGoal>initialize</defaultGoal>
         <plugins>
           <plugin>
-            <groupId>org.codehaus.gmaven</groupId>
-            <artifactId>gmaven-plugin</artifactId>
+            <groupId>org.codehaus.gmavenplus</groupId>
+            <artifactId>gmavenplus-plugin</artifactId>
             <executions>
               <execution>
                 <phase>initialize</phase>
@@ -164,7 +207,9 @@
                   <goal>execute</goal>
                 </goals>
                 <configuration>
-                  <source>${project.basedir}/src/main/script/driver.groovy</source>
+                  <scripts>
+                    <script>${project.baseUri}/src/main/script/driver.groovy</script>
+                  </scripts>
                 </configuration>
               </execution>
             </executions>

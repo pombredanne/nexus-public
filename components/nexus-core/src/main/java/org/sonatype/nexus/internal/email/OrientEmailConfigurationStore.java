@@ -18,16 +18,20 @@ import javax.inject.Named;
 import javax.inject.Provider;
 import javax.inject.Singleton;
 
-import org.sonatype.goodies.lifecycle.LifecycleSupport;
 import org.sonatype.nexus.common.app.ManagedLifecycle;
+import org.sonatype.nexus.common.stateguard.Guarded;
+import org.sonatype.nexus.common.stateguard.StateGuardLifecycleSupport;
 import org.sonatype.nexus.email.EmailConfiguration;
-import org.sonatype.nexus.email.EmailConfigurationStore;
 import org.sonatype.nexus.orient.DatabaseInstance;
+import org.sonatype.nexus.orient.DatabaseInstanceNames;
 
 import com.orientechnologies.orient.core.db.document.ODatabaseDocumentTx;
 
 import static com.google.common.base.Preconditions.checkNotNull;
-import static org.sonatype.nexus.common.app.ManagedLifecycle.Phase.STORAGE;
+import static org.sonatype.nexus.common.app.ManagedLifecycle.Phase.SCHEMAS;
+import static org.sonatype.nexus.common.stateguard.StateGuardLifecycleSupport.State.STARTED;
+import static org.sonatype.nexus.orient.transaction.OrientTransactional.inTx;
+import static org.sonatype.nexus.orient.transaction.OrientTransactional.inTxRetry;
 
 /**
  * Orient {@link EmailConfigurationStore}.
@@ -35,18 +39,18 @@ import static org.sonatype.nexus.common.app.ManagedLifecycle.Phase.STORAGE;
  * @since 3.0
  */
 @Named("orient")
-@ManagedLifecycle(phase = STORAGE)
+@ManagedLifecycle(phase = SCHEMAS)
 @Singleton
 public class OrientEmailConfigurationStore
-  extends LifecycleSupport
+  extends StateGuardLifecycleSupport
   implements EmailConfigurationStore
 {
   private final Provider<DatabaseInstance> databaseInstance;
 
-  private EmailConfigurationEntityAdapter entityAdapter;
+  private final EmailConfigurationEntityAdapter entityAdapter;
 
   @Inject
-  public OrientEmailConfigurationStore(@Named("config") final Provider<DatabaseInstance> databaseInstance,
+  public OrientEmailConfigurationStore(@Named(DatabaseInstanceNames.CONFIG) final Provider<DatabaseInstance> databaseInstance,
                                        final EmailConfigurationEntityAdapter entityAdapter)
   {
     this.databaseInstance = checkNotNull(databaseInstance);
@@ -60,23 +64,16 @@ public class OrientEmailConfigurationStore
     }
   }
 
-  private ODatabaseDocumentTx openDb() {
-    ensureStarted();
-    return databaseInstance.get().acquire();
-  }
-
   @Override
   @Nullable
+  @Guarded(by = STARTED)
   public EmailConfiguration load() {
-    try (ODatabaseDocumentTx db = openDb()) {
-      return entityAdapter.singleton.get(db);
-    }
+    return inTx(databaseInstance).call(entityAdapter::get);
   }
 
   @Override
+  @Guarded(by = STARTED)
   public void save(final EmailConfiguration configuration) {
-    try (ODatabaseDocumentTx db = openDb()) {
-      entityAdapter.singleton.set(db, configuration);
-    }
+    inTxRetry(databaseInstance).run(db -> entityAdapter.set(db, configuration));
   }
 }

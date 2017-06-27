@@ -20,7 +20,8 @@
 Ext.define('NX.coreui.migration.AgentStep', {
   extend: 'NX.wizard.Step',
   requires: [
-    'NX.coreui.migration.AgentScreen'
+    'NX.coreui.migration.AgentScreen',
+    'NX.I18n'
   ],
 
   screen: 'NX.coreui.migration.AgentScreen',
@@ -67,7 +68,7 @@ Ext.define('NX.coreui.migration.AgentStep', {
 
     me.mask(NX.I18n.render(me, 'Connect_Mask'));
 
-    NX.direct.migration_Assistant.connect(input.url, input.accessToken, function (response, event) {
+    NX.direct.migration_Assistant.connect(input.url, input.accessToken, input.useTrustStoreForUrl, function (response, event) {
       me.unmask();
 
       // FIXME: handle validation/errors

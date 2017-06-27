@@ -81,6 +81,35 @@ Ext.define('NX.State', {
 
   /**
    * @public
+   * @returns {boolean} true, if license is installed and valid
+   */
+  isLicenseValid: function() {
+    return this.isLicenseInstalled() && this.getValue('license', {})['valid'] === true;
+  },
+
+  /**
+   * @public
+   * @returns {number}  of days until license expires, may be null
+   */
+  getDaysToLicenseExpiry: function() {
+    return this.getValue('license', {})['daysToExpiry'];
+  },
+
+  /**
+   * @public
+   * @param {string} feature name
+   * @returns {boolean} true, if feature exists
+   */
+  hasFeature: function(feature) {
+    var features = this.getValue('license', {})['features'];
+    if (features) {
+      return features.indexOf(feature) !== -1;
+    }
+    return false;
+  },
+
+  /**
+   * @public
    * @returns {Object} current user, if any
    */
   getUser: function () {
@@ -138,7 +167,7 @@ Ext.define('NX.State', {
     var edition = this.getEdition(),
         version = this.getVersion();
 
-    return (edition === 'OSS' ? edition + ' ' : '') + version;
+    return edition + ' ' + version;
   },
 
   /**

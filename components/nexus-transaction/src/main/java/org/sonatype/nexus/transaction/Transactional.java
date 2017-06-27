@@ -26,7 +26,7 @@ import java.lang.annotation.Target;
  * @since 3.0
  */
 @Retention(RetentionPolicy.RUNTIME)
-@Target({ ElementType.METHOD })
+@Target({ ElementType.METHOD, ElementType.ANNOTATION_TYPE })
 public @interface Transactional
 {
   /**
@@ -47,4 +47,11 @@ public @interface Transactional
    * updates where it's safe to proceed even if the commit threw an exception.
    */
   Class<? extends Exception>[] swallow() default {};
+
+  /**
+   * Helper to apply this transactional behaviour to lambdas.
+   *
+   * @since 3.2
+   */
+  Operations<RuntimeException, ?> operation = new Operations<>();
 }

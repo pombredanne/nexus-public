@@ -26,6 +26,11 @@ import com.google.common.base.Joiner;
 import com.google.common.collect.Lists;
 import com.google.common.collect.Maps;
 
+import static java.util.Collections.emptyList;
+import static java.util.Optional.ofNullable;
+import static java.util.stream.Collectors.joining;
+import static java.util.stream.Stream.concat;
+
 /**
  * A repository combo box {@link FormField}.
  *
@@ -53,9 +58,15 @@ public class RepositoryCombobox
 
   private List<String> excludingFormats;
 
+  private List<String> includingVersionPolicies;
+
+  private List<String> excludingVersionPolicies;
+
   private List<String> includingFacets;
 
   private boolean generateAllRepositoriesEntry;
+
+  private boolean includeEntriesForAllFormats;
 
   private interface Messages
       extends MessageBundle
@@ -120,6 +131,22 @@ public class RepositoryCombobox
   }
 
   /**
+   * Repository will be present if is of any of specified Version Policies.
+   */
+  public RepositoryCombobox includingAnyOfVersionPolicies(final String... versionPolicies) {
+    this.includingVersionPolicies = Arrays.asList(versionPolicies);
+    return this;
+  }
+
+  /**
+   * Repository will not be present if is of any of specified Version Policies.
+   */
+  public RepositoryCombobox excludingAnyOfVersionPolicies(final String... versionPolicies) {
+    this.excludingVersionPolicies = Arrays.asList(versionPolicies);
+    return this;
+  }
+
+  /**
    * Repository will be present if is of any of specified formats.
    */
   public RepositoryCombobox includingAnyOfFacets(final Class<?>... facets) {
@@ -151,11 +178,28 @@ public class RepositoryCombobox
   }
 
   /**
+   * Will add an entry for "All Repositories" as well as "All nuget repositories", "All npm repositories", etc.
+   *
+   * @since 3.1
+   */
+  public RepositoryCombobox includeEntriesForAllFormats() {
+    this.includeEntriesForAllFormats = true;
+    return this;
+  }
+
+  /**
    * @since 3.0
    */
   @Override
   public String getStoreApi() {
-    return "coreui_Repository." + (generateAllRepositoriesEntry ? "readReferencesAddingEntryForAll" : "readReferences");
+    String method = "readReferences";
+    if (includeEntriesForAllFormats) {
+      method = "readReferencesAddingEntriesForAllFormats";
+    }
+    else if (generateAllRepositoriesEntry) {
+      method = "readReferencesAddingEntryForAll";
+    }
+    return "coreui_Repository." + method;
   }
 
   /**
@@ -201,6 +245,7 @@ public class RepositoryCombobox
         contentClasses.append("!").append(format);
       }
     }
+    String versionPolicies = getVersionPolicies();
     if (contentClasses.length() > 0) {
       storeFilters.put("format", contentClasses.toString());
     }
@@ -210,7 +255,18 @@ public class RepositoryCombobox
     if (regardlessViewPermissions) {
       storeFilters.put("regardlessViewPermissions", "true");
     }
+    if (versionPolicies.length() > 0) {
+      storeFilters.put("versionPolicies", versionPolicies);
+    }
     return storeFilters.isEmpty() ? null : storeFilters;
+  }
+
+  private String getVersionPolicies() {
+    return concat(
+        ofNullable(includingVersionPolicies).orElse(emptyList()).stream(),
+        ofNullable(excludingVersionPolicies).orElse(emptyList()).stream()
+            .map(s -> "!" + s))
+        .collect(joining(","));
   }
 
 }

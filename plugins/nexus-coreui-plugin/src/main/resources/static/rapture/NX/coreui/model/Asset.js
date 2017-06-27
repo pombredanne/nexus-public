@@ -26,9 +26,12 @@ Ext.define('NX.coreui.model.Asset', {
     {name: 'contentType', type: 'string', sortType: 'asUCText'},
     {name: 'size', type: 'int'},
     {name: 'repositoryName', type: 'string', sortType: 'asUCText'},
-    {name: 'lastUpdated', type: 'date', dateFormat: 'c' },
-    {name: 'lastAccessed', type: 'date', dateFormat: 'c' },
+    {name: 'containingRepositoryName', type: 'string', sortType: 'asUCText'},
+    {name: 'blobCreated', type: 'date', dateFormat: 'c' },
+    {name: 'blobUpdated', type: 'date', dateFormat: 'c' },
+    {name: 'lastDownloaded', type: 'date', dateFormat: 'c' },
     {name: 'blobRef', type: 'string', sortType: 'asUCText'},
+    {name: 'componentId', type: 'string', sortType: 'asUCText'},
     {name: 'attributes', type: 'auto' /*object*/}
   ]
 });

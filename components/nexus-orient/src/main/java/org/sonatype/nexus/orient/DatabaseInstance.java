@@ -40,4 +40,11 @@ public interface DatabaseInstance
    * Access the {@link DatabaseExternalizer} for the database.
    */
   DatabaseExternalizer externalizer();
+
+  /**
+   * Freeze or release database for read-only mode.
+   *
+   * @since 3.2.1
+   */
+  void setFrozen(boolean frozen);
 }

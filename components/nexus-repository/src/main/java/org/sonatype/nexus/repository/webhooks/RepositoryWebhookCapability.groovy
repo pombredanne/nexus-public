@@ -31,8 +31,9 @@ import org.sonatype.nexus.formfields.FormField
 import org.sonatype.nexus.formfields.ItemselectFormField
 import org.sonatype.nexus.formfields.PasswordFormField
 import org.sonatype.nexus.formfields.RepositoryCombobox
-import org.sonatype.nexus.formfields.StringTextFormField
+import org.sonatype.nexus.formfields.UrlFormField
 import org.sonatype.nexus.repository.capability.RepositoryConditions
+import org.sonatype.nexus.repository.types.GroupType
 import org.sonatype.nexus.webhooks.WebhookService
 import org.sonatype.nexus.webhooks.WebhookSubscription
 
@@ -72,19 +73,19 @@ class RepositoryWebhookCapability
     @DefaultMessage('Repository to discriminate events from')
     String repositoryHelp()
 
-    @DefaultMessage('Names')
+    @DefaultMessage('Event Types')
     String namesLabel()
 
-    @DefaultMessage('Names of webhooks to trigger')
+    @DefaultMessage('Event types which trigger this Webhook')
     String namesHelp()
 
     @DefaultMessage('URL')
     String urlLabel()
 
-    @DefaultMessage('Send a HTTP POST request to the URL with details of webhook as application/json body')
+    @DefaultMessage('Send a HTTP POST request to this URL')
     String urlHelp()
 
-    @DefaultMessage('Secret')
+    @DefaultMessage('Secret Key')
     String secretLabel()
 
     @DefaultMessage('Key to use for HMAC payload digest')
@@ -223,10 +224,7 @@ class RepositoryWebhookCapability
           messages.repositoryLabel(),
           messages.repositoryHelp(),
           FormField.MANDATORY
-      ).with {
-        includeAnEntryForAllRepositories()
-        return it
-      }
+      ).excludingAnyOfTypes(GroupType.NAME)
 
       this.names = new ItemselectFormField(
           P_NAMES,
@@ -241,7 +239,7 @@ class RepositoryWebhookCapability
         return it
       }
 
-      this.url = new StringTextFormField(
+      this.url = new UrlFormField(
           P_URL,
           messages.urlLabel(),
           messages.urlHelp(),
@@ -284,6 +282,11 @@ class RepositoryWebhookCapability
     @Override
     Set<Tag> getTags() {
       return [Tag.categoryTag(messages.category())]
+    }
+
+    @Override
+    protected Set<String> uniqueProperties() {
+      return [P_REPOSITORY, P_URL] as Set
     }
   }
 }

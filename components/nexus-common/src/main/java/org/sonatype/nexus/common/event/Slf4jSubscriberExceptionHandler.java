@@ -12,6 +12,7 @@
  */
 package org.sonatype.nexus.common.event;
 
+import com.google.common.eventbus.EventBus;
 import com.google.common.eventbus.SubscriberExceptionContext;
 import com.google.common.eventbus.SubscriberExceptionHandler;
 import org.slf4j.Logger;

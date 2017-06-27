@@ -22,10 +22,12 @@ rem Window name of the windows console
 rem SET KARAF_TITLE
 rem Location of Java installation
 rem SET JAVA_HOME
-rem Minimum memory for the JVM
+rem Minimum Java heap memory for the JVM
 rem SET JAVA_MIN_MEM
-rem Maximum memory for the JVM
+rem Maximum Java heap memory for the JVM
 rem SET JAVA_MAX_MEM
+rem Maximum direct buffer memory for the JVM
+rem SET DIRECT_MAX_MEM
 rem Additional JVM options
 rem SET EXTRA_JAVA_OPTS
 rem Karaf home folder
@@ -40,8 +42,3 @@ rem Additional available Karaf options
 rem SET KARAF_OPTS
 rem Enable debug mode
 rem SET KARAF_DEBUG
-
-SET JAVA_MIN_MEM=1200M
-SET JAVA_MAX_MEM=1200M
-
-SET KARAF_OPTS=-Djava.net.preferIPv4Stack=true

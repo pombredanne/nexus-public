@@ -20,6 +20,9 @@
  */
 Ext.define('NX.coreui.migration.ProgressScreenSupport', {
   extend: 'NX.wizard.GridScreen',
+  requires: [
+    'NX.I18n'
+  ],
 
   /**
    * @override
@@ -65,14 +68,14 @@ Ext.define('NX.coreui.migration.ProgressScreenSupport', {
           }
         },
         {
-          header: 'Name',
+          header: NX.I18n.render(me, 'Name_Column'),
           dataIndex: 'name',
           flex: 1
         },
         {
-          header: 'Status',
+          header: NX.I18n.render(me, 'Status_Column'),
           dataIndex: 'status',
-          flex: 1,
+          flex: 2,
           renderer: function (value) {
             if (value === null) {
               return 'Pending';
@@ -81,11 +84,11 @@ Ext.define('NX.coreui.migration.ProgressScreenSupport', {
           }
         },
         {
-          header: 'State',
+          header: NX.I18n.render(me, 'State_Column'),
           dataIndex: 'state'
         },
         {
-          header: 'Complete',
+          header: NX.I18n.render(me, 'Complete_Column'),
           dataIndex: 'complete',
           width: 80,
           renderer: function (value) {
@@ -99,7 +102,8 @@ Ext.define('NX.coreui.migration.ProgressScreenSupport', {
         }
       ],
 
-      store: 'NX.coreui.migration.ProgressStore'
+      store: 'NX.coreui.migration.ProgressStore',
+      invalidateScrollerOnRefresh: false
     };
 
     me.callParent();

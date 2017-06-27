@@ -28,16 +28,18 @@ package org.sonatype.nexus.quartz.internal.orient;
  * under the License.
  */
 
+import java.util.Arrays;
 import java.util.Date;
 import java.util.List;
 import java.util.Set;
 
 import org.sonatype.goodies.testsupport.TestSupport;
-import org.sonatype.nexus.orient.DatabaseInstanceRule;
+import org.sonatype.nexus.common.node.NodeAccess;
+import org.sonatype.nexus.orient.testsupport.DatabaseInstanceRule;
 
-import com.google.inject.util.Providers;
 import com.orientechnologies.orient.core.db.document.ODatabaseDocumentTx;
-import junit.framework.Assert;
+import com.orientechnologies.orient.core.record.impl.ODocument;
+import com.orientechnologies.orient.core.sql.query.OSQLSynchQuery;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Ignore;
@@ -51,9 +53,11 @@ import org.quartz.JobExecutionContext;
 import org.quartz.JobExecutionException;
 import org.quartz.JobKey;
 import org.quartz.ObjectAlreadyExistsException;
+import org.quartz.PersistJobDataAfterExecution;
 import org.quartz.SchedulerException;
 import org.quartz.SimpleScheduleBuilder;
 import org.quartz.Trigger;
+import org.quartz.Trigger.CompletedExecutionInstruction;
 import org.quartz.Trigger.TriggerState;
 import org.quartz.TriggerBuilder;
 import org.quartz.TriggerKey;
@@ -65,10 +69,14 @@ import org.quartz.spi.ClassLoadHelper;
 import org.quartz.spi.OperableTrigger;
 import org.quartz.spi.SchedulerSignaler;
 
+import static org.hamcrest.MatcherAssert.assertThat;
+import static org.hamcrest.Matchers.greaterThan;
+import static org.hamcrest.Matchers.is;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
+import static org.mockito.Mockito.mock;
 
 /**
  * Tests for {@link JobStoreImpl}. Based on original Quartz 2.2.2 AbstractJobStoreTest.
@@ -79,7 +87,7 @@ public class JobStoreImplTest
     extends TestSupport
 {
   @Rule
-  public DatabaseInstanceRule database = new DatabaseInstanceRule("test");
+  public DatabaseInstanceRule database = DatabaseInstanceRule.inMemory("test");
 
   private JobStoreImpl jobStore;
 
@@ -88,13 +96,15 @@ public class JobStoreImplTest
     ClassLoadHelper loadHelper = new CascadingClassLoadHelper();
     loadHelper.initialize();
     this.jobStore = createJobStore();
+    this.jobStore.start();
     this.jobStore.initialize(loadHelper, new SampleSignaler());
     this.jobStore.schedulerStarted();
   }
 
   @After
-  public void tearDown() {
+  public void tearDown() throws Exception {
     jobStore.shutdown();
+    jobStore.stop();
   }
 
   private JobStoreImpl createJobStore() {
@@ -107,16 +117,17 @@ public class JobStoreImplTest
       calendarEntityAdapter.register(db);
 
       // nuke quartz data
-      jobDetailEntityAdapter.deleteAll.execute(db);
-      triggerEntityAdapter.deleteAll.execute(db);
-      calendarEntityAdapter.deleteAll.execute(db);
+      jobDetailEntityAdapter.deleteAll(db);
+      triggerEntityAdapter.deleteAll(db);
+      calendarEntityAdapter.deleteAll(db);
     }
 
     return new JobStoreImpl(
-        Providers.of(database.getInstance()),
+        database.getInstanceProvider(),
         jobDetailEntityAdapter,
         triggerEntityAdapter,
-        calendarEntityAdapter
+        calendarEntityAdapter,
+        mock(NodeAccess.class)
     );
   }
 
@@ -516,7 +527,7 @@ public class JobStoreImplTest
       // Manually trigger the first fire time computation that scheduler would do. Otherwise
       // the store.acquireNextTriggers() will not work properly.
       Date fireTime = trigger.computeFirstFireTime(null);
-      Assert.assertEquals(true, fireTime != null);
+      assertEquals(true, fireTime != null);
 
       jobStore.storeJobAndTrigger(job, trigger);
     }
@@ -527,8 +538,8 @@ public class JobStoreImplTest
       int maxCount = 1;
       long timeWindow = 0;
       List<OperableTrigger> triggers = jobStore.acquireNextTriggers(noLaterThan, maxCount, timeWindow);
-      Assert.assertEquals(1, triggers.size());
-      Assert.assertEquals("job" + i, triggers.get(0).getKey().getName());
+      assertEquals(1, triggers.size());
+      assertEquals("job" + i, triggers.get(0).getKey().getName());
 
       // Let's remove the trigger now.
       jobStore.removeJob(triggers.get(0).getJobKey());
@@ -561,9 +572,40 @@ public class JobStoreImplTest
     // time window needs to be big to be able to pick up multiple triggers when they are a minute apart
     long timeWindow = 8 * MIN;
     List<OperableTrigger> triggers = jobStore.acquireNextTriggers(noLaterThan, maxCount, timeWindow);
-    Assert.assertEquals(7, triggers.size());
+    assertEquals(7, triggers.size());
     for (int i = 0; i < 7; i++) {
-      Assert.assertEquals("job" + i, triggers.get(i).getKey().getName());
+      assertEquals("job" + i, triggers.get(i).getKey().getName());
+    }
+  }
+
+  @Test
+  public void jobDataOnlySavedWhenDirty() throws Exception {
+    JobDetail job = JobBuilder.newJob(MyJob.class).withIdentity("testJob").build();
+    OperableTrigger trigger = (OperableTrigger) TriggerBuilder.newTrigger().withIdentity("testJob").forJob(job).build();
+    jobStore.storeJobAndTrigger(job, trigger);
+
+    int baseRecordVersion = queryJobDetail("testJob").getVersion();
+
+    // same job data after trigger fired...
+    jobStore.triggersFired(Arrays.asList(trigger));
+    jobStore.triggeredJobComplete(trigger, job, CompletedExecutionInstruction.NOOP);
+
+    // ...should not save the job
+    assertThat(queryJobDetail("testJob").getVersion(), is(baseRecordVersion));
+
+    // different job data after trigger fired...
+    jobStore.triggersFired(Arrays.asList(trigger));
+    job.getJobDataMap().put("testKey", "testValue");
+    jobStore.triggeredJobComplete(trigger, job, CompletedExecutionInstruction.NOOP);
+
+    // ...should save the job
+    assertThat(queryJobDetail("testJob").getVersion(), greaterThan(baseRecordVersion));
+  }
+
+  private ODocument queryJobDetail(final String name) {
+    try (ODatabaseDocumentTx db = database.getInstance().acquire()) {
+      String selectJob = "select from quartz_job_detail where name=?";
+      return (ODocument) db.query(new OSQLSynchQuery<>(selectJob), name).get(0);
     }
   }
 
@@ -593,6 +635,7 @@ public class JobStoreImplTest
   /**
    * An empty job for testing purpose.
    */
+  @PersistJobDataAfterExecution
   public static class MyJob
       implements Job
   {

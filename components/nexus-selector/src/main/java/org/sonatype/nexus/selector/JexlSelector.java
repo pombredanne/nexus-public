@@ -15,10 +15,15 @@ package org.sonatype.nexus.selector;
 import java.util.Optional;
 import java.util.Set;
 
-import org.apache.commons.jexl2.Expression;
-import org.apache.commons.jexl2.JexlContext;
-import org.apache.commons.jexl2.JexlEngine;
-import org.apache.commons.jexl2.MapContext;
+import org.sonatype.nexus.common.text.Strings2;
+
+import org.apache.commons.jexl3.JexlBuilder;
+import org.apache.commons.jexl3.JexlContext;
+import org.apache.commons.jexl3.JexlEngine;
+import org.apache.commons.jexl3.JexlException;
+import org.apache.commons.jexl3.JexlExpression;
+import org.apache.commons.jexl3.JexlInfo;
+import org.apache.commons.jexl3.MapContext;
 
 import static com.google.common.base.Strings.isNullOrEmpty;
 
@@ -26,17 +31,30 @@ import static com.google.common.base.Strings.isNullOrEmpty;
  * {@link Selector} implementation that uses JEXL to evaluate expressions describing the selection criteria.
  *
  * @see <a href="http://commons.apache.org/proper/commons-jexl/">Commons Jexl</a>
- *
  * @since 3.0
  */
 public class JexlSelector
     implements Selector
 {
-  private static final JexlEngine engine = new JexlEngine();
-  private final Optional<Expression> expression;
+  // this stops JEXL from using expensive new Throwable().getStackTrace() to find caller info
+  private static final JexlInfo CALLER_INFO = new JexlInfo(JexlSelector.class.getName(), 0, 0);
+
+  private static final JexlBuilder jexlBuilder = new JexlBuilder();
+
+  // provide a JEXL engine per-thread to avoid contention on the parsing lock
+  private static final ThreadLocal<JexlEngine> threadLocalJexl = new ThreadLocal<JexlEngine>()
+  {
+    @Override
+    protected JexlEngine initialValue() {
+      return jexlBuilder.create();
+    }
+  };
+
+  private final Optional<JexlExpression> expression;
 
   public JexlSelector(final String expression) {
-    this.expression = isNullOrEmpty(expression) ? Optional.<Expression>empty() : Optional.of(engine.createExpression(expression));
+    this.expression = isNullOrEmpty(expression) ? Optional.<JexlExpression>empty()
+        : Optional.of(threadLocalJexl.get().createExpression(CALLER_INFO, expression));
   }
 
   @Override
@@ -57,8 +75,23 @@ public class JexlSelector
     }
   }
 
+  public static String prettyExceptionMsg(JexlException e) {
+    JexlInfo info = e.getInfo();
+    if (info != null) {
+      String detail = e.getMessage();
+      if (!Strings2.isBlank(detail)) {
+        detail = e.getMessage().substring(detail.indexOf('\'') + 1, detail.lastIndexOf('\''));
+      }
+      String parseMsg = detail.isEmpty() ? detail : String.format(" Error parsing string: '%s'.", detail);
+      return String.format("Invalid JEXL at line '%s' column '%s'.%s", info.getLine(), info.getColumn(), parseMsg);
+    }
+    else {
+      return e.getMessage();
+    }
+  }
+
   @Override
   public String toString() {
-    return expression.isPresent() ? expression.get().dump() : "";
+    return expression.isPresent() ? expression.get().getParsedText() : "";
   }
 }

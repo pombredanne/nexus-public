@@ -12,6 +12,7 @@
  */
 package org.sonatype.nexus.blobstore.file.internal;
 
+import java.io.File;
 import java.nio.file.Path;
 
 import org.sonatype.goodies.lifecycle.Lifecycle;
@@ -41,4 +42,11 @@ public interface BlobStoreMetricsStore
    * Indicate that a blob of the given size has been removed.
    */
   void recordDeletion(long size);
+
+  /**
+   * Provide an array of the metrics files backing the blobstore at the specified root.
+   *
+   * @since 3.2.1
+   */
+  File[] listBackingFiles();
 }

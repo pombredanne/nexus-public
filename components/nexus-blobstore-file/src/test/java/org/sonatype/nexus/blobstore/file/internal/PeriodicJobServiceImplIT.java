@@ -16,18 +16,13 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.sonatype.goodies.testsupport.TestSupport;
-import org.sonatype.nexus.blobstore.file.PeriodicJobService.PeriodicJob;
-import org.sonatype.nexus.blobstore.file.PeriodicJobServiceImpl;
+import org.sonatype.nexus.blobstore.file.internal.PeriodicJobService.PeriodicJob;
 
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 
 import static com.jayway.awaitility.Awaitility.await;
-import static java.util.concurrent.TimeUnit.MILLISECONDS;
-import static org.hamcrest.MatcherAssert.assertThat;
-import static org.hamcrest.Matchers.greaterThan;
-import static org.hamcrest.Matchers.is;
 
 /**
  * Test for {@link PeriodicJobServiceImpl}

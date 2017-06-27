@@ -16,8 +16,6 @@ import javax.annotation.Nullable;
 
 import org.sonatype.goodies.common.Time;
 
-import com.google.common.base.Throwables;
-
 /**
  * Connection configuration.
  *
@@ -37,6 +35,12 @@ public class ConnectionConfiguration
 
   @Nullable
   private Boolean useTrustStore;
+
+  @Nullable
+  private Boolean enableCircularRedirects;
+
+  @Nullable
+  private Boolean enableCookies;
 
   @Nullable
   public Time getTimeout() {
@@ -74,12 +78,42 @@ public class ConnectionConfiguration
     this.useTrustStore = useTrustStore;
   }
 
+  /**
+   * @since 3.2.1
+   */
+  @Nullable
+  public Boolean getEnableCircularRedirects() {
+    return enableCircularRedirects;
+  }
+
+  /**
+   * @since 3.2.1
+   */
+  public void setEnableCircularRedirects(@Nullable final Boolean enableCircularRedirects) {
+    this.enableCircularRedirects = enableCircularRedirects;
+  }
+
+  /**
+   * @since 3.2.1
+   */
+  @Nullable
+  public Boolean getEnableCookies() {
+    return enableCookies;
+  }
+
+  /**
+   * @since 3.2.1
+   */
+  public void setEnableCookies(@Nullable final Boolean enableCookies) {
+    this.enableCookies = enableCookies;
+  }
+
   public ConnectionConfiguration copy() {
     try {
       return (ConnectionConfiguration) clone();
     }
     catch (CloneNotSupportedException e) {
-      throw Throwables.propagate(e);
+      throw new RuntimeException(e);
     }
   }
 
@@ -90,6 +124,8 @@ public class ConnectionConfiguration
         ", maximumRetries=" + maximumRetries +
         ", userAgentSuffix=" + userAgentSuffix +
         ", useTrustStore=" + useTrustStore +
+        ", enableCircularRedirects=" + enableCircularRedirects +
+        ", enableCookies=" + enableCookies +
         '}';
   }
 }

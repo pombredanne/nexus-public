@@ -12,13 +12,16 @@
  */
 package org.sonatype.nexus.scheduling;
 
+import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
 
+import org.sonatype.nexus.formfields.CheckboxFormField;
+import org.sonatype.nexus.formfields.ComboboxFormField;
 import org.sonatype.nexus.formfields.FormField;
 
-import com.google.common.collect.ImmutableList;
-
 import static com.google.common.base.Preconditions.checkNotNull;
+import static java.util.stream.Collectors.toList;
 
 /**
  * Support for {@link TaskDescriptor} implementations.
@@ -28,6 +31,20 @@ import static com.google.common.base.Preconditions.checkNotNull;
 public abstract class TaskDescriptorSupport
     implements TaskDescriptor
 {
+  // Common task form-field identifiers/labels
+
+  public static final String MULTINODE_KEY = "multinode";
+
+  public static final String MULTINODE_LABEL = "Multi node";
+
+  public static final String MULTINODE_HELP = "Run task on all nodes in the cluster.";
+
+  public static final String LIMIT_NODE_KEY = "limitnode";
+
+  public static final String LIMIT_NODE_LABEL = "Select node";
+
+  public static final String LIMIT_NODE_HELP = "Run task on this node in the cluster.";
+
   // Constants to help document configuration, since these are final and we have no fluent builder ATM
 
   protected static final boolean VISIBLE = true;
@@ -65,7 +82,7 @@ public abstract class TaskDescriptorSupport
     this.exposed = exposed;
 
     checkNotNull(formFields);
-    this.formFields = ImmutableList.copyOf(formFields);
+    this.formFields = Arrays.stream(formFields).filter(Objects::nonNull).collect(toList());
   }
 
   @Override
@@ -107,5 +124,29 @@ public abstract class TaskDescriptorSupport
         ", visible=" + visible +
         ", exposed=" + exposed +
         '}';
+  }
+
+  @Override
+  public void initializeConfiguration(final TaskConfiguration configuration) {
+    // no-op
+  }
+
+  /**
+   * Creates a new {@link FormField} for tasks which can run on multiple-nodes at once.
+   *
+   * @since 3.1
+   */
+  protected static CheckboxFormField newMultinodeFormField() {
+    return new CheckboxFormField(MULTINODE_KEY, MULTINODE_LABEL, MULTINODE_HELP, false);
+  }
+
+  /**
+   * Creates a new {@link FormField} for tasks which are limited to a specific node.
+   *
+   * @since 3.2
+   */
+  protected static ComboboxFormField<String> newLimitNodeFormField() {
+    return new ComboboxFormField<String>(LIMIT_NODE_KEY, LIMIT_NODE_LABEL, LIMIT_NODE_HELP, true)
+        .withStoreApi("node_NodeAccess.nodes").withIdMapping("name");
   }
 }

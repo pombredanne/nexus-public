@@ -12,8 +12,8 @@
  */
 package org.sonatype.nexus.repository.search;
 
-import java.util.HashMap;
 import java.util.Map;
+import java.util.Objects;
 
 import javax.inject.Inject;
 import javax.inject.Named;
@@ -24,15 +24,21 @@ import org.sonatype.nexus.common.stateguard.Guarded;
 import org.sonatype.nexus.repository.FacetSupport;
 import org.sonatype.nexus.repository.Format;
 import org.sonatype.nexus.repository.Repository;
+import org.sonatype.nexus.repository.config.Configuration;
 import org.sonatype.nexus.repository.storage.Asset;
+import org.sonatype.nexus.repository.storage.Bucket;
 import org.sonatype.nexus.repository.storage.Component;
 import org.sonatype.nexus.repository.storage.StorageFacet;
 import org.sonatype.nexus.repository.storage.StorageTx;
 import org.sonatype.nexus.transaction.Transactional;
 import org.sonatype.nexus.transaction.UnitOfWork;
 
+import com.google.common.collect.ImmutableMap;
+
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
+import static com.google.common.collect.Iterables.filter;
+import static com.google.common.collect.Iterables.transform;
 import static org.sonatype.nexus.repository.FacetSupport.State.STARTED;
 import static org.sonatype.nexus.repository.search.DefaultComponentMetadataProducer.REPOSITORY_NAME;
 
@@ -52,12 +58,20 @@ public class SearchFacetImpl
 
   private final Map<String, ComponentMetadataProducer> componentMetadataProducers;
 
+  private Map<String, Object> repositoryMetadata;
+
   @Inject
   public SearchFacetImpl(final SearchService searchService,
                          final Map<String, ComponentMetadataProducer> componentMetadataProducers)
   {
     this.searchService = checkNotNull(searchService);
     this.componentMetadataProducers = checkNotNull(componentMetadataProducers);
+  }
+
+  @Override
+  protected void doInit(Configuration configuration) throws Exception {
+    repositoryMetadata = ImmutableMap.of(REPOSITORY_NAME, getRepository().getName());
+    super.doInit(configuration);
   }
 
   @Override
@@ -77,33 +91,43 @@ public class SearchFacetImpl
   @Transactional
   protected void rebuildComponentIndex() {
     final StorageTx tx = UnitOfWork.currentTx();
-    for (Component component : tx.browseComponents(tx.findBucket(getRepository()))) {
-      try {
-        put(component, tx.browseAssets(component));
-      }
-      catch (RuntimeException e) {
-        // one "bad" should not stop processing whole repository
-        log.warn("Could not reindex component: {}", component, e);
-      }
-    }
+    bulkPut(tx, tx.browseComponents(tx.findBucket(getRepository())));
   }
 
+  @Override
   @Guarded(by = STARTED)
   @Transactional
   public void put(final EntityId componentId) {
     checkNotNull(componentId);
-    Component component;
     final StorageTx tx = UnitOfWork.currentTx();
-    component = tx.findComponent(componentId, tx.findBucket(getRepository()));
+    Component component = tx.findComponentInBucket(componentId, tx.findBucket(getRepository()));
     if (component != null) {
-      put(component, tx.browseAssets(component));
+      put(tx, component);
     }
   }
 
+  @Override
+  @Guarded(by = STARTED)
+  @Transactional
+  public void bulkPut(final Iterable<EntityId> componentIds) {
+    checkNotNull(componentIds);
+    final StorageTx tx = UnitOfWork.currentTx();
+    final Bucket bucket = tx.findBucket(getRepository());
+    bulkPut(tx, filter(transform(componentIds, id -> tx.findComponentInBucket(id, bucket)), Objects::nonNull));
+  }
+
+  @Override
   @Guarded(by = STARTED)
   public void delete(final EntityId componentId) {
     checkNotNull(componentId);
     searchService.delete(getRepository(), componentId.getValue());
+  }
+
+  @Override
+  @Guarded(by = STARTED)
+  public void bulkDelete(final Iterable<EntityId> componentIds) {
+    checkNotNull(componentIds);
+    searchService.bulkDelete(getRepository(), transform(componentIds, EntityId::getValue));
   }
 
   @Override
@@ -117,13 +141,24 @@ public class SearchFacetImpl
   }
 
   /**
-   * Extracts metadata from passed in {@link Component} and {@link Asset}s, and PUTs it into the repository's index.
+   * Extracts metadata from given {@link Component} and its assets, and PUTs it into the repository's index.
    */
-  private void put(final Component component, final Iterable<Asset> assets) {
-    Map<String, Object> additional = new HashMap<>();
-    additional.put(REPOSITORY_NAME, getRepository().getName());
-    String json = producer(component).getMetadata(component, assets, additional);
-    searchService.put(getRepository(), EntityHelper.id(component).getValue(), json);
+  private void put(final StorageTx tx, final Component component) {
+    searchService.put(
+        getRepository(),
+        documentId(component),
+        json(component, tx.browseAssets(component)));
+  }
+
+  /**
+   * Extracts metadata from given {@link Component}s and their assets, and bulk-PUTs them into the repository's index.
+   */
+  private void bulkPut(final StorageTx tx, final Iterable<Component> components) {
+    searchService.bulkPut(
+        getRepository(),
+        components,
+        this::documentId,
+        component -> json(component, tx.browseAssets(component)));
   }
 
   /**
@@ -139,5 +174,19 @@ public class SearchFacetImpl
     }
     checkState(producer != null, "Could not find a component metadata producer for format: %s", format);
     return producer;
+  }
+
+  /**
+   * Returns the id of the document representing the given component in the repository's index.
+   */
+  private String documentId(final Component component) {
+    return EntityHelper.id(component).getValue();
+  }
+
+  /**
+   * Returns the JSON document representing the given component in the repository's index.
+   */
+  private String json(final Component component, final Iterable<Asset> assets) {
+    return producer(component).getMetadata(component, assets, repositoryMetadata);
   }
 }

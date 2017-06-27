@@ -20,6 +20,7 @@
 Ext.define('NX.coreui.migration.ContentStep', {
   extend: 'NX.wizard.Step',
   requires: [
+    'NX.State',
     'NX.coreui.migration.ContentScreen'
   ],
 
@@ -67,7 +68,7 @@ Ext.define('NX.coreui.migration.ContentStep', {
     this.set('content-options', values);
 
     // when options indicate repositories, move to next
-    if (values['repositories.usermanaged']) {
+    if (values['repositories']) {
       this.moveNext();
     }
     else {

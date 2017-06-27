@@ -17,15 +17,17 @@ import java.util.Date;
 import javax.annotation.Nullable;
 
 import org.sonatype.goodies.common.ComponentSupport;
+import org.sonatype.nexus.common.event.EventManager;
 import org.sonatype.nexus.quartz.internal.QuartzSchedulerSPI;
 import org.sonatype.nexus.scheduling.TaskConfiguration;
 import org.sonatype.nexus.scheduling.TaskInfo;
 import org.sonatype.nexus.scheduling.TaskRemovedException;
+import org.sonatype.nexus.scheduling.events.TaskDeletedEvent;
 import org.sonatype.nexus.scheduling.schedule.Manual;
 import org.sonatype.nexus.scheduling.schedule.Schedule;
 
-import com.google.common.base.Throwables;
 import org.quartz.JobKey;
+import org.quartz.SchedulerException;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
@@ -48,6 +50,8 @@ public class QuartzTaskInfo
    */
   static final String TASK_INFO_KEY = QuartzTaskInfo.class.getName();
 
+  private final EventManager eventManager;
+
   private final QuartzSchedulerSPI scheduler;
 
   private final JobKey jobKey;
@@ -60,11 +64,13 @@ public class QuartzTaskInfo
 
   private volatile boolean removed;
 
-  public QuartzTaskInfo(final QuartzSchedulerSPI scheduler,
+  public QuartzTaskInfo(final EventManager eventManager,
+                        final QuartzSchedulerSPI scheduler,
                         final JobKey jobKey,
                         final QuartzTaskState taskState,
                         @Nullable final QuartzTaskFuture taskFuture)
   {
+    this.eventManager = checkNotNull(eventManager);
     this.scheduler = checkNotNull(scheduler);
     this.jobKey = checkNotNull(jobKey);
     this.removed = false;
@@ -221,6 +227,9 @@ public class QuartzTaskInfo
     boolean result = scheduler.removeTask(jobKey);
     if (result) {
       log.info("Task {} removed", config.getTaskLogName());
+
+      // HACK: does not seem to be a better place to fire an event when a task (with context of TaskInfo) is deleted
+      eventManager.post(new TaskDeletedEvent(this));
     }
     else {
       log.warn("Task {} vanished", config.getTaskLogName());
@@ -229,38 +238,32 @@ public class QuartzTaskInfo
   }
 
   @Override
-  public synchronized TaskInfo runNow() throws TaskRemovedException {
-    checkState(State.RUNNING != state, "Task already running");
-    checkState(getConfiguration().isEnabled(), "Task is disabled");
+  public TaskInfo runNow(final String triggerSource) throws TaskRemovedException {
 
-    if (isRemovedOrDone()) {
-      throw new TaskRemovedException("Task removed: " + jobKey);
+    synchronized (this) {
+      checkState(State.RUNNING != state, "Task already running");
+      checkState(getConfiguration().isEnabled(), "Task is disabled");
+
+      if (isRemovedOrDone()) {
+        throw new TaskRemovedException("Task removed: " + jobKey);
+      }
     }
-
-    final TaskConfiguration config = taskState.getConfiguration();
-
-    log.info("Task {} runNow", config.getTaskLogName());
-    setNexusTaskState(
-        State.RUNNING,
-        taskState,
-        new QuartzTaskFuture(
-            scheduler,
-            jobKey,
-            config.getTaskLogName(),
-            new Date(),
-            scheduler.scheduleFactory().now()
-        )
-    );
-
     try {
+      log.info("Task {} runNow", taskState.getConfiguration().getTaskLogName());
+
       // DONE jobs are removed, and here will fail
-      scheduler.runNow(jobKey);
+      scheduler.runNow(triggerSource, jobKey, this, taskState);
     }
-    catch (Exception e) {
-      Throwables.propagateIfInstanceOf(e, TaskRemovedException.class);
-      throw Throwables.propagate(e);
+    catch (SchedulerException e) {
+      throw new RuntimeException(e);
     }
     return this;
+  }
+
+  @Override
+  public String getTriggerSource() {
+    QuartzTaskFuture currentTaskFuture = taskFuture;
+    return currentTaskFuture != null ? currentTaskFuture.getTriggerSource() : null;
   }
 
   @Override

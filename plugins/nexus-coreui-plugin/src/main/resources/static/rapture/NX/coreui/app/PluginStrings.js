@@ -40,11 +40,6 @@ Ext.define('NX.coreui.app.PluginStrings', {
     Browse_Assets_Description_Feature: 'Browse assets',
     Browse_Components_Title_Feature: 'Components',
     Browse_Components_Description_Feature: 'Browse components and assets',
-    Browse_BrowseRepositoryList_Name_Column: 'Name',
-    Browse_BrowseRepositoryList_Type_Column: 'Type',
-    Browse_BrowseRepositoryList_Format_Column: 'Format',
-    Browse_BrowseRepositoryList_EmptyText_View: 'No browseable repositories defined',
-    Browse_BrowseRepositoryList_EmptyText_Filter: 'No repositories matched "$filter"',
     Browse_BrowseComponentList_Name_Column: 'Name',
     Browse_BrowseComponentList_Group_Column: 'Group',
     Browse_BrowseComponentList_Version_Column: 'Version',
@@ -56,17 +51,42 @@ Ext.define('NX.coreui.app.PluginStrings', {
     Assets_Info_Path: 'Path',
     Assets_Info_ContentType: 'Content type',
     Assets_Info_FileSize: 'File size',
-    Assets_Info_Last_Updated: 'Last updated',
-    Assets_Info_Last_Accessed: 'Last accessed',
+    Assets_Info_Last_Downloaded: 'Last downloaded',
     Assets_Info_Locally_Cached: 'Locally cached',
     Assets_Info_BlobRef: 'Blob reference',
+    Assets_Info_Blob_Created: 'Blob created',
+    Assets_Info_Blob_Updated: 'Blob updated',
+    Assets_Info_ContainingRepositoryName: 'Containing repo',
     AssetInfo_Delete_Button: 'Delete asset',
     AssetInfo_Delete_Title: 'Confirm deletion?',
     AssetInfo_Delete_Success: 'Asset deleted: {0}',
 
     ComponentDetails_Delete_Button: 'Delete component',
+    ComponentDetails_Analyze_Button: 'Analyze application',
     ComponentDetails_Delete_Title: 'Confirm deletion?',
     ComponentDetails_Delete_Success: 'Component deleted: {0}',
+    ComponentDetails_Analyze_Success: 'Analysis in process. Email will be sent when report is ready.',
+
+    AnalyzeApplicationWindow_Title: 'Analyze Application',
+    AnalyzeApplicationWindow_Form_Asset_FieldLabel: 'Application asset',
+    AnalyzeApplicationWindow_Form_Asset_HelpText: 'Select the asset that contains the application',
+    AnalyzeApplicationWindow_Form_Asset_EmptyText: 'Select an asset',
+    AnalyzeApplicationWindow_Form_Email_FieldLabel: 'Email address',
+    AnalyzeApplicationWindow_Form_Email_HelpText: 'The address where the summary report will be sent',
+    AnalyzeApplicationWindow_Form_Password_FieldLabel: 'Report password',
+    AnalyzeApplicationWindow_Form_Password_HelpText: 'A password to gain access to the detailed report',
+    AnalyzeApplicationWindow_Form_ProprietaryPackages_FieldLabel: 'Proprietary packages',
+    AnalyzeApplicationWindow_Form_ProprietaryPackages_HelpText: 'A comma separated list of proprietary packages',
+    AnalyzeApplicationWindow_Form_Label_FieldLabel: 'Report label',
+    AnalyzeApplicationWindow_Form_Label_HelpText: 'The name the report will be given',
+    AnalyzeApplicationWindow_Analyze_Button: 'Analyze',
+    AnalyzeApplicationWindow_Cancel_Button: 'Cancel',
+    AnalyzeApplicationWindow_Form_Html: '<p>Application analysis performs a deep inspection of this application, ' +
+    'identifying potential risks.  More information is available ' +
+    '<a href="http://links.sonatype.com/products/insight/ac/home" target="_blank" class="x-link">here</a>.</p>',
+    AnalyzeApplicationWindow_Loading_Mask: 'Loading',
+    AnalyzeApplicationWindow_No_Assets_Error_Title: 'Component has no application assets',
+    AnalyzeApplicationWindow_No_Assets_Error_Message: 'The component you are analyzing has no application assets, please select another component for analysis.',
 
     HealthCheckInfo_Most_Popular_Version_Label: 'Most popular version',
     HealthCheckInfo_Age_Label: 'Age',
@@ -83,7 +103,9 @@ Ext.define('NX.coreui.app.PluginStrings', {
     Search_SaveSearchFilter_Title: 'Save search filter',
     Search_SaveSearchFilter_Name_FieldLabel: 'Filter name',
     Search_SaveSearchFilter_Description_FieldLabel: 'Filter description',
+    Search_Results_Limit_Message: 'Only showing the first {0} of {1} results',
     SearchCriteria_Keyword_FieldLabel: 'Keyword',
+    SearchCriteria_RepositoryName_FieldLabel: 'Repository Name',
     SearchCriteria_Name_FieldLabel: 'Name',
     SearchCriteria_Format_FieldLabel: 'Format',
     SearchCriteria_Group_FieldLabel: 'Group',
@@ -94,6 +116,8 @@ Ext.define('NX.coreui.app.PluginStrings', {
     SearchNuget_Group: 'NuGet Repositories',
     SearchPyPi_Group: 'PyPI Repositories',
     SearchRubygems_Group: 'RubyGems Repositories',
+    SearchGitLfs_Group: 'Git LFS Repositories',
+    SearchYum_Group: 'Yum Repositories',
     SearchCriteria_MD5_FieldLabel: 'MD5',
     SearchCriteria_SHA1_FieldLabel: 'SHA-1',
     SearchCriteria_SHA256_FieldLabel: 'SHA-256',
@@ -118,11 +142,16 @@ Ext.define('NX.coreui.app.PluginStrings', {
     SearchPyPi_Classifiers_FieldLabel: 'Classifiers',
     SearchPyPi_Description_FieldLabel: 'Description',
     SearchPyPi_Keywords_FieldLabel: 'PyPI Keywords',
-    SearchPyPi_PyVersion_FieldLabel: 'Python Version',
     SearchPyPi_Summary_FieldLabel: 'Summary',
     SearchRubygems_Name_FieldLabel: 'Name',
     SearchRubygems_Version_FieldLabel: 'Version',
     SearchRubygems_Platform_FieldLabel: 'Platform',
+    SearchRubygems_Summary_FieldLabel: 'Summary',
+    SearchRubygems_Description_FieldLabel: 'Description',
+    SearchRubygems_Licenses_FieldLabel: 'Licenses',
+    SearchRubygems_Homepage_FieldLabel: 'Homepage',
+    SearchYum_Architecture_FieldLabel: 'Architecture',
+    SearchYum_Name_FieldLabel: 'Package Name',
     Search_More_Text: 'More criteria',
     Search_SearchResultList_Format_Header: 'Format',
     Search_SearchResultList_Group_Header: 'Group',
@@ -142,7 +171,7 @@ Ext.define('NX.coreui.app.PluginStrings', {
 
     // Browse -> Search -> Bower
     SearchBower_Text: 'Bower',
-    SearchBower_Description: 'Search for components in bower repositories',
+    SearchBower_Description: 'Search for components in Bower repositories',
 
     // Browse -> Search -> Docker
     SearchDocker_Text: 'Docker',
@@ -151,6 +180,10 @@ Ext.define('NX.coreui.app.PluginStrings', {
     // Browse -> Search -> Raw
     SearchRaw_Text: 'Raw',
     SearchRaw_Description: 'Search for components in Raw repositories',
+
+    // Browse -> Search -> Git LFS
+    SearchGitLfs_Text: 'Git LFS',
+    SearchGitLfs_Description: 'Search for components in Git LFS repositories',
 
     // Browse -> Search -> npm
     SearchNpm_Text: 'npm',
@@ -176,6 +209,10 @@ Ext.define('NX.coreui.app.PluginStrings', {
     SearchMaven_Text: 'Maven',
     SearchMaven_Description: 'Search for components by Maven coordinates',
 
+    // Browse -> Search -> Yum
+    SearchYum_Text: 'Yum',
+    SearchYum_Description: 'Search for components in Yum repositories',
+
     // Browse -> Browse
     FeatureGroups_Browse_Text: 'Browse',
     FeatureGroups_Browse_Description: 'Browse assets and components',
@@ -191,6 +228,7 @@ Ext.define('NX.coreui.app.PluginStrings', {
     // Admin -> Repository -> Repositories
     Repositories_Text: 'Repositories',
     Repositories_Description: 'Manage repositories',
+    Repositories_Delete_Mask: 'Deleting repository',
     Repositories_Create_Title: 'Create Repository: {0}',
     Repositories_SelectRecipe_Title: 'Select Recipe',
     Repository_RepositoryAdd_Create_Success: 'Repository created: ',
@@ -219,7 +257,7 @@ Ext.define('NX.coreui.app.PluginStrings', {
     Repository_Facet_DockerHostedFacet_V1_Enabled_Help: 'Allow clients to use the V1 API to interact with this Repository.',
     Repository_Facet_DockerConnectorFacet_Title: 'Repository Connectors',
     Repository_Facet_DockerConnectorFacet_Help: '<em>Connectors allow Docker clients to connect directly ' +
-    'to hosted registries, but are not always required. Consult our <a href="{0}" target="_blank">documentation</a>' +
+    'to hosted registries, but are not always required. Consult our <a href="http://links.sonatype.com/products/nexus/docker-ssl-connector/docs" target="_blank">documentation</a>' +
     ' for which connector is appropriate for your use case.<em/>',
     Repository_Facet_DockerConnectorFacet_HttpPort_FieldLabel: 'HTTP',
     Repository_Facet_DockerConnectorFacet_HttpPort_HelpText: 'Create an HTTP connector at specified port. Normally used if the server is behind a secure proxy.',
@@ -284,9 +322,13 @@ Ext.define('NX.coreui.app.PluginStrings', {
     Repository_Facet_ProxyFacet_ArtifactAge_HelpText: 'How long (in minutes) to cache artifacts before rechecking the remote repository. Release repositories should use -1.',
     Repository_Facet_ProxyFacet_MetadataAge_HelpText: 'How long (in minutes) to cache metadata before rechecking the remote repository.',
     Repository_Facet_HttpClientFacet_ConnectionRetries_FieldLabel: 'Connection retries',
-    Repository_Facet_HttpClientFacet_ConnectionRetries_HelpText: 'How many times to try to connect before giving up',
+    Repository_Facet_HttpClientFacet_ConnectionRetries_HelpText: 'Total retries if the initial connection attempt suffers a timeout',
     Repository_Facet_HttpClientFacet_ConnectionTimeout_FieldLabel: 'Connection timeout',
     Repository_Facet_HttpClientFacet_ConnectionTimeout_HelpText: 'Seconds to wait for activity before stopping and retrying the connection. Leave blank to use the globally defined HTTP timeout.',
+    Repository_Facet_HttpClientFacet_EnableCircularRedirects_FieldLabel: 'Enable circular redirects',
+    Repository_Facet_HttpClientFacet_EnableCircularRedirects_HelpText: 'Enable redirects to the same location (may be required by some servers)',
+    Repository_Facet_HttpClientFacet_EnableCookies_FieldLabel: 'Enable cookies',
+    Repository_Facet_HttpClientFacet_EnableCookies_HelpText: 'Allow cookies to be stored and used',
     Repository_Facet_StorageFacet_BlobStore_FieldLabel: 'Blob store',
     Repository_Facet_StorageFacet_BlobStore_HelpText: 'Blob store used to store asset contents',
     Repository_Facet_StorageFacet_BlobStore_EmptyText: 'Select a blob store',
@@ -296,9 +338,7 @@ Ext.define('NX.coreui.app.PluginStrings', {
     Repository_Facet_NegativeCacheFacet_Enabled_HelpText: 'Cache responses for content not present in the proxied repository',
     Repository_Facet_NegativeCacheFacet_TTL_FieldLabel: 'Not found cache TTL',
     Repository_Facet_NegativeCacheFacet_TTL_HelpText: 'How long to cache the fact that a file was not found in the repository (in minutes)',
-    Repository_Facet_NegativeCacheFacet_QueryCacheSize_FieldLabel: 'Query cache size',
-    Repository_Facet_NegativeCacheFacet_QueryCacheSize_HelpText: 'Maximum number of cached query results from the proxied repository',
-    Repository_Facet_NugetProxyFacet_ItemMaxAge_FieldLabel: 'Query cache age',
+    Repository_Facet_NugetProxyFacet_ItemMaxAge_FieldLabel: 'Metadata query cache age',
     Repository_Facet_NugetProxyFacet_ItemMaxAge_HelpText: 'How long to cache query results from the proxied repository (in seconds)',
     Repository_Facet_HttpClientFacet_AuthenticationType_FieldLabel: 'Authentication type',
     Repository_Facet_HttpClientFacet_AuthenticationType_Username: 'Username',
@@ -310,15 +350,14 @@ Ext.define('NX.coreui.app.PluginStrings', {
     HealthCheckRepositoryColumn_Analyzing: 'Analyzing…',
     HealthCheckRepositoryColumn_Analyzing_Tooltip: '<span><h2>The Analysis is Under Way</h2>' +
     'The contents of your repository are being analyzed. This process should only take a few minutes.<br><br>' +
-    'When the analysis is complete and this page has been refreshed, a set of icons will be displayed that indicate ' +
-    'how many security and licensing issues were discovered.<br><br>' +
-    'Hover your mouse over these icons to see additional information about the issues that were found.</span>',
+    'When the analysis is complete and this page has been refreshed, we will show you the top 5 most vulnerable ' +
+    'components in the repository, the number of downloads over the last month, and a year-over-year overview.</span>',
     HealthCheckRepositoryColumn_View_Permission_Error: '<span><h2>Insufficient Permissions to View Summary Report</h2>' +
     'To view healthcheck summary report for a repository your user account must have the necessary permissions.</span>',
     HealthCheckRepositoryColumn_Analyze: 'Analyze',
     HealthCheckRepositoryColumn_Analyze_Tooltip: '<span><h2>Repository Health Check Analysis</h2>Click this button to request a Repository Health Check (RHC) ' +
     'by IQ Server.  The process is non-invasive and non-disruptive. IQ Server ' +
-    'will return actionable quality, security, and licensing information about the open source components in the repository.' +
+    'will return actionable quality and security information about the open source components in the repository.' +
     '<br><br><a href="http://links.sonatype.com/products/clm/rhc/home" ' +
     'target="_blank">How the IQ Server Repository Health Check can help you make better software faster</a></span>',
     HealthCheckRepositoryColumn_Analyze_Dialog_Title: 'Analyze Repository',
@@ -328,6 +367,8 @@ Ext.define('NX.coreui.app.PluginStrings', {
     HealthCheckRepositoryColumn_Analyze_Permission_Error: '<span><h2>Insufficient Permissions to Analyze a Repository</h2>' +
     'To analyze a repository your user account must have permissions to start analysis.</span>',
     HealthCheckRepositoryColumn_Loading: 'Loading…',
+    HealthCheckRepositoryColumn_CollectingTrendData: 'Collecting trend data…',
+    HealthCheckRepositoryColumn_DownloadsDisabled: 'Download trends disabled',
     HealthCheckRepositoryColumn_Unavailable_Tooltip: '<span><h2>Repository Health Check Unavailable</h2>A Repository Health Check (RHC) ' +
     'cannot be performed on this repository, because it is an unsupported type or out of service.<br><br>' +
     '<a href="http://links.sonatype.com/products/clm/rhc/home" ' +
@@ -336,6 +377,7 @@ Ext.define('NX.coreui.app.PluginStrings', {
     // Admin -> Repository -> Blob Stores
     Blobstores_Text: 'Blob Stores',
     Blobstores_Description: 'Manage blob stores',
+    Blobstores_Delete_Mask: 'Deleting blob store',
     Blobstores_Create_Title: 'Create blob store',
     Blobstore_BlobstoreAdd_Create_Success: 'Blob store created: ',
     Blobstore_BlobstoreAdd_Create_Error: 'You do not have permission to create blob stores',
@@ -350,6 +392,7 @@ Ext.define('NX.coreui.app.PluginStrings', {
     Blobstore_BlobstoreList_Filter_EmptyText: 'No blob stores matched "$filter"',
     Blobstore_BlobstoreList_EmptyText: 'No blob stores defined',
     Blobstore_BlobstoreFeature_Delete_Button: 'Delete blob store',
+    Blobstore_BlobstoreFeature_Delete_Disabled_Message: 'This blob store is in use by {0} and cannot be deleted',
     Blobstore_BlobstoreSettings_Title: 'Settings',
     Blobstore_BlobstoreAdd_Type_FieldLabel: 'Type',
     Blobstore_BlobstoreAdd_Type_EmptyText: 'Select a type',
@@ -375,9 +418,28 @@ Ext.define('NX.coreui.app.PluginStrings', {
     Selector_SelectorSettingsForm_Name_FieldLabel: 'Name',
     Selector_SelectorSettingsForm_Description_FieldLabel: 'Description',
     Selector_SelectorSettingsForm_Expression_FieldLabel: 'Search expression',
-    Selector_SelectorSettingsForm_Expression_HelpText: 'Identify repositories, components or assets (JEXL query)',
+    Selector_SelectorSettingsForm_Expression_HelpText: 'Use JEXL query to identify repositories, components or assets',
+    Selector_SelectorSettingsForm_Expression_AfterBodyEl: '<div style="font-size: 11px"><br/>' +
+    '<h4>Example <a href="http://links.sonatype.com/products/nexus/jexl" target="_blank">JEXL</a> queries:</h4>' +
+    '<p>Select all "raw" format content<br/><i>format == "raw"</i></p>' +
+    '<p>Select all "maven2" content with a groupId that starts with "org.sonatype.nexus"<br/><i>format == "maven2" and coordinate.groupId =^ "org.sonatype.nexus."</i></p>' +
+    '<br/>' +
+    '<p>See the <a href="http://links.sonatype.com/products/nexus/selectors/docs" target="_blank">Nexus documentation</a> for more details</p>' +
+    '</div>',
     Selector_SelectorSettingsForm_SelectorID_Title: 'Selector ID',
     Selector_SelectorSettingsForm_Specification_Title: 'Specification',
+    Selector_SelectorSettingsForm_Preview_Button: 'Preview results',
+
+    // Admin -> Repository -> Selectors -> Preview Window
+    SelectorPreviewWindow_Title: 'Preview results',
+    SelectorPreviewWindow_jexl_FieldLabel: 'Expression',
+    SelectorPreviewWindow_repository_FieldLabel: 'Preview Repository',
+    SelectorPreviewWindow_repository_HelpText: 'Select a repository to evaluate the content selector and see the content that would be available.',
+    SelectorPreviewWindow_repository_EmptyText: 'Select a repository...',
+    SelectorPreviewWindow_EmptyText_View: 'No assets in repository matched the expression',
+    SelectorPreviewWindow_EmptyText_Filter: 'No assets matched "$filter"',
+    SelectorPreviewWindow_Name_Column: 'Name',
+    SelectorPreviewWindow_Preview_Button: 'Preview',
 
     // Admin -> Security
     FeatureGroups_Security_Title: 'Security',
@@ -720,7 +782,7 @@ Ext.define('NX.coreui.app.PluginStrings', {
     Loggers_Reset_Title: 'Confirm reset?',
     Loggers_Reset_HelpText: 'Reset loggers to their default levels',
     Logging_LoggerList_Reset_Button: 'Reset to default levels',
-    Loggers_Reset_Success: 'Loggers had been reset',
+    Loggers_Reset_Success: 'Loggers have been reset',
     Logging_LoggerList_Name_Header: 'Name',
     Logging_LoggerList_Level_Header: 'Level',
     Logging_LoggerList_Level_TraceItem: 'TRACE',
@@ -931,6 +993,20 @@ Ext.define('NX.coreui.app.PluginStrings', {
     Bundles_LastModified_Info: 'Last Modified',
     Bundles_Summary_Info: '{0}',
 
+    // Admin -> System -> Nodes
+    Nodes_Toggling_read_only_mode: 'Toggling read-only mode',
+    Nodes_Disable_read_only_mode: 'Disable read-only mode',
+    Nodes_Disable_read_only_mode_dialog: 'Disable read-only mode?',
+    Nodes_Enable_read_only_mode: 'Enable read-only mode',
+    Nodes_Enable_read_only_mode_dialog: 'Enable read-only mode?',
+    Nodes_Read_only_mode_warning: 'Nexus Repository is in read-only mode',
+    Nodes_Quorum_lost_warning: 'Not enough Nexus Repository Manager nodes in the cluster are reachable so quorum cannot be achieved; database is read only. <a href="#admin/system/nodes/clusterreset">Troubleshoot</a>',
+    Nodes_OSS_Message: 'You are running a single-node instance of Nexus Repository Manager.',
+    Nodes_enable_read_only_mode_dialog_description: 'Are you sure you want to reject additions of new' +
+    ' components and changes to configuration?',
+    Nodes_disable_read_only_mode_dialog_description: 'Are you sure you want to stop rejecting additions of new' +
+    ' components and changes to configuration?',
+
     // Admin -> System -> Tasks
     Tasks_Text: 'Tasks',
     Tasks_Description: 'Manage scheduled tasks',
@@ -964,6 +1040,10 @@ Ext.define('NX.coreui.app.PluginStrings', {
     Tasks_StopConfirm_HelpText: 'Stop {0} task?',
     Tasks_Stop_Success: 'Task stopped: {0}',
     TaskFeature_Summary_Title: 'Summary',
+    TaskFeature_Summary_Status_Section_Title: 'Run Status',
+    TaskFeature_Status_Node_Column: 'Node ID',
+    TaskFeature_Status_Status_Column: 'Status',
+    TaskFeature_Status_LastResult_Column: 'Last result',
     Tasks_Settings_Title: 'Settings',
     Tasks_ID_Info: 'ID',
     Tasks_Name_Info: 'Name',
@@ -975,7 +1055,7 @@ Ext.define('NX.coreui.app.PluginStrings', {
     Task_TaskSettingsForm_Update_Error: 'You do not have permission to update tasks or task is readonly',
     Tasks_Update_Success: 'Task updated: {0}',
     Task_TaskSettingsForm_Enabled_FieldLabel: 'Task enabled',
-    Task_TaskSettingsForm_Enabled_HelpText: 'This flag determines if the task is currently active.  To disable this task for a period of time, de-select this checkbox',
+    Task_TaskSettingsForm_Enabled_HelpText: 'This flag determines if the task is currently active.  To disable this task for a period of time, de-select this checkbox.',
     Task_TaskSettingsForm_Name_FieldLabel: 'Task name',
     Task_TaskSettingsForm_Name_HelpText: 'A name for the scheduled task',
     Task_TaskSettingsForm_Email_FieldLabel: 'Notification email',
@@ -1057,7 +1137,40 @@ Ext.define('NX.coreui.app.PluginStrings', {
     Nuget_NuGetApiKey_Access_Button: 'Access API Key',
     Nuget_NuGetApiKey_Access_HelpText: 'Accessing NuGet API Key requires validation of your credentials.',
     Nuget_NuGetApiKey_Reset_Button: 'Reset API Key',
-    Nuget_NuGetApiKey_Reset_HelpText: 'Resetting NuGet API Key requires validation of your credentials.'
+    Nuget_NuGetApiKey_Reset_HelpText: 'Resetting NuGet API Key requires validation of your credentials.',
+
+    // Admin -> System -> Licensing
+    Licensing_Text: 'Licensing',
+    Licensing_Description: 'A valid license is required for PRO features. Manage it here.',
+    Licensing_LicensingDetails_Company_FieldLabel: 'Company',
+    Licensing_LicensingDetails_Name_FieldLabel: 'Name',
+    Licensing_LicensingDetails_Email_FieldLabel: 'Email',
+    Licensing_LicensingDetails_EffectiveDate_FieldLabel: 'Effective date',
+    Licensing_LicensingDetails_ExpirationDate_FieldLabel: 'Expiration date',
+    Licensing_LicensingDetails_Type_FieldLabel: 'License type',
+    Licensing_LicensingDetails_LicensedUsers_FieldLabel: 'Number of licensed users',
+    Licensing_LicensingDetails_Connections_FieldLabel: 'Number of unique IP addresses that have connected in the last 7 days',
+    Licensing_LicensingDetails_Fingerprint_FieldLabel: 'Fingerprint',
+    Licensing_LicensingDetails_InstallLicense_Title: 'Install license',
+    Licensing_LicensingDetails_InstallLicense_Html: '<p>Installing a new license requires restarting the server to take effect</p>',
+    Licensing_LicensingDetails_LicenseSelect_Button: 'Select license&hellip;',
+    Licensing_LicensingDetails_LicenseInstall_Button: 'Install license',
+    Licensing_LicenseAgreement_Title: 'Nexus Repository Manager License Agreement',
+    Licensing_LicenseAgreement_Yes_Button: 'I agree',
+    Licensing_LicenseAgreement_No_Button: 'I do not agree',
+    Licensing_LicenseAgreement_Download_Button: 'Download a copy of the license.',
+    Licensing_Install_Success: 'License installed. Restart is only required if you are enabling new PRO features.',
+    Licensing_Authentication_Validation: '{0} a license requires validation of your credentials.',
+
+    // Admin -> System -> Licensing -> Recent Connections
+    LicenseUsers_Title: 'Recent Connections',
+    LicenseUsers_Description: 'Reports active users in the last 7 days',
+    Licensing_LicenseUserList_Download_Button: 'Download',
+    Licensing_LicenseUserList_IP_Header: 'IP',
+    Licensing_LicenseUserList_Date_Header: 'Date',
+    Licensing_LicenseUserList_User_Header: 'User',
+    Licensing_LicenseUserList_Agent_Header: 'User agent',
+    Licensing_LicenseUserList_EmptyText: 'No active users in the last 7 days.'
   },
 
   /**
@@ -1067,24 +1180,34 @@ Ext.define('NX.coreui.app.PluginStrings', {
    */
   bundles: {
     'NX.coreui.migration.Controller': {
-      Feature_Text: 'Migration',
-      Feature_Description: 'Migrate configuration and content from remote server',
+      Feature_Text: 'Upgrade',
+      Feature_Description: 'Upgrade configuration and content from Nexus Repository Manager 2',
 
       Activate_Mask: 'Loading',
 
       Configure_Mask: 'Configuring',
-      Configure_Message: 'Migration configured',
+      Configure_Message: 'Upgrade configured',
 
-      Cancel_Confirm_Title: 'Cancel Migration',
-      Cancel_Confirm_Text: 'Do you want to cancel migration?',
+      Cancel_Confirm_Title: 'Cancel Upgrade',
+      Cancel_Confirm_Text: 'Do you want to cancel upgrade?',
       Cancel_Mask: 'Canceling',
-      Cancel_Message: 'Migration canceled',
+      Cancel_Message: 'Upgrade canceled',
 
       IncompleteCancel_Title: 'Configuration Incomplete',
-      IncompleteCancel_Text: 'Migration has been partially configured and needs to be reset to continue.',
+      IncompleteCancel_Text: 'Upgrade has been partially configured and needs to be reset to continue.',
       IncompleteCancel_Mask: 'Resetting',
 
       PlanStepDetail_Mask: 'Fetching details'
+    },
+
+    'NX.coreui.migration.AgentScreen': {
+      Title: 'Agent Connection',
+      Description: "<p>Configure the connection to remote server's upgrade-agent.<br/>" +
+      'The remote server must have an upgrade-agent configured and enabled.</p>',
+      Endpoint_FieldLabel: 'URL',
+      Endpoint_HelpText: "The base URL of the remote server",
+      Token_FieldLabel: 'Access Token',
+      Token_HelpText: "The access token from the remote server's upgrade-agent settings"
     },
 
     'NX.coreui.migration.AgentStep': {
@@ -1092,21 +1215,65 @@ Ext.define('NX.coreui.app.PluginStrings', {
       Connect_Message: 'Connected'
     },
 
+    'NX.coreui.migration.ContentScreen': {
+      Title: 'Content',
+      Description: '<p>What content from Nexus Repository Manager 2 would you like to transfer?</p>',
+      Repositories_FieldLabel: 'Repository configuration and content',
+      Configuration_FieldLabel: 'Server configuration'
+    },
+
+    'NX.coreui.migration.OverviewScreen': {
+      Title: 'Overview',
+      Description: '<p>This wizard will help you upgrade from Nexus Repository Manager 2.</p>' +
+      '<p>Many aspects of a server can be upgraded <strong>automatically</strong>:' +
+      '<ul>' +
+      '<li>Configuration: security (users, roles and privileges) and other applicable system settings </li>' +
+      '<li>Repositories in supported formats: maven2, nuget, npm, rubygems, site</li>' +
+      '</ul>' +
+      '</p>' +
+      '<p>Some aspects are <strong>incompatible</strong> and can not be automatically upgraded:' +
+      '<ul>' +
+      '<li>Unsupported repository formats: yum, p2, obr</li>' +
+      '<li>Scheduled tasks</li>' +
+      '<li>Capabilities</li>' +
+      '</ul>' +
+      '</p>' +
+      '<p>Upgrade is incremental. We recommend upgrading one or two repositories first to ensure that the process works, then repeat the process and upgrade the rest. Take note of the following:' +
+      '<ul>' +
+      '<li>Repository upgrade could take <strong>considerable time</strong>.</li>' +
+      '<li>Until upgrade has successfully completed, it is not recommended to make any configuration changes in Nexus Repository Manager 3, as the configuration is volatile during this time.</li>' +
+      '<li>Also during the upgrade, all of the repositories in Nexus Repository Manager 3 will be offline.</li>' +
+      '<li>Server configuration can be transferred multiple times, each time it will completely replace existing configurations.</li>' +
+      '</ul>' +
+      '</p>'
+    },
+
+    'NX.coreui.migration.PhaseFinishScreen': {
+      Title: 'Finishing',
+      Description: '<p>Upgrade is finishing.</p>',
+      Abort_Button: 'Abort',
+      Done_Button: 'Done'
+    },
+
     'NX.coreui.migration.RepositoryDefaultsScreen': {
       $extend: 'NX.coreui.migration.RepositoryCustomizeWindow',
-      IngestMethod_HelpText: 'Choose how the repository should be migrated. The method you choose may not be supported by all repositories.'
+
+      Title: 'Repository Defaults',
+      Description: '<p>Configure the default settings used for repository upgrade.<br/>' +
+      'Per-repository settings may be customized when selecting repositories to upgrade.</p>',
+      IngestMethod_HelpText: 'Choose how the repository content should be transferred. The method you choose may not be supported by all repositories.'
     },
 
     'NX.coreui.migration.RepositoryCustomizeWindow': {
       Title: 'Customize {0}',
 
       BlobStore_FieldLabel: 'Destination',
-      BlobStore_HelpText: 'Choose where this repository should be migrated',
+      BlobStore_HelpText: 'Choose where the repository content should be stored',
       BlobStore_EmptyText: 'Choose a blob store',
 
       IngestMethod_FieldLabel: 'Method',
-      IngestMethod_HelpText: 'Choose how the repository should be migrated',
-      IngestMethod_EmptyText: 'Choose a migration method',
+      IngestMethod_HelpText: 'Choose how the repository content should be transferred',
+      IngestMethod_EmptyText: 'Choose a repository content transfer method',
       IngestMethod_Link: 'Hard link (fastest)',
       IngestMethod_Copy: 'Filesystem copy (slow)',
       IngestMethod_Download: 'Download (slowest)'
@@ -1114,53 +1281,115 @@ Ext.define('NX.coreui.app.PluginStrings', {
 
     'NX.coreui.migration.PlanStepDetailWindow': {
       Title: '{0}',
-      EmptyLog: 'No progress'
+      EmptyLog: 'No progress',
+      Timestamp_Column: 'Timestamp',
+      Message_Column: 'Message'
+    },
+
+    'NX.coreui.migration.PreviewScreen': {
+      Title: 'Preview',
+      Description: '<p>Here is a preview of the upgrade configuration.</p>',
+      Name_Column: 'Name',
+      State_Column: 'State',
+      Begin_Button: 'Begin'
     },
 
     'NX.coreui.migration.PreviewStep': {
-      Begin_Confirm_Title: 'Begin Migration',
-      Begin_Confirm_Text: 'Do you want to begin migration?',
-      Begin_Mask: 'Migration beginning',
-      Begin_Message: 'Migration begun'
+      Begin_Confirm_Title: 'Begin Upgrade',
+      Begin_Confirm_Text: 'Do you want to begin upgrade?',
+      Begin_Mask: 'Upgrade beginning',
+      Begin_Message: 'Upgrade begun'
+    },
+
+    'NX.coreui.migration.ProgressScreenSupport': {
+      Name_Column: 'Name',
+      Status_Column: 'Status',
+      State_Column: 'State',
+      Complete_Column: 'Complete'
     },
 
     'NX.coreui.migration.ProgressStepSupport': {
       Loading_Mask: 'Loading'
     },
 
+    'NX.coreui.migration.RepositoriesScreen': {
+      Title: 'Repositories',
+      Description: '<p>Select the repositories to be upgraded.<br/>' +
+      'Customize advanced configuration of the upgrade per-repository as needed.</p>',
+      Repository_Column: 'Repository',
+      Type_Column: 'Type',
+      Format_Column: 'Format',
+      Supported_Column: 'Supported',
+      Status_Column: 'Status',
+      Destination_Column: 'Destination',
+      Method_Column: 'Method',
+      Action_Tooltip: 'Customize repository options'
+    },
+
+    'NX.coreui.migration.RepositoriesStep': {
+      $extend: 'NX.coreui.migration.ProgressStepSupport'
+    },
+
+    'NX.coreui.migration.RepositoryDefaultsStep': {
+      $extend: 'NX.coreui.migration.ProgressStepSupport'
+    },
+
+    'NX.coreui.migration.PhasePrepareScreen': {
+      Title: 'Preparing',
+      Description: '<p>Preparing for upgrade.</p>',
+      Abort_Button: 'Abort',
+      Continue_Button: 'Continue'
+    },
+
     'NX.coreui.migration.PhasePrepareStep': {
       $extend: 'NX.coreui.migration.ProgressStepSupport',
 
-      Abort_Confirm_Title: 'Abort Migration',
-      Abort_Confirm_Text: 'Do you want to abort migration?',
-      Abort_Mask: 'Migration aborting',
-      Abort_Message: 'Migration aborted',
+      Abort_Confirm_Title: 'Abort Upgrade',
+      Abort_Confirm_Text: 'Do you want to abort upgrade?',
+      Abort_Mask: 'Upgrade aborting',
+      Abort_Message: 'Upgrade aborted',
 
-      Continue_Confirm_Title: 'Continue Migration',
-      Continue_Confirm_Text: 'Do you want to continue migration?',
-      Continue_Mask: 'Migration continuing',
-      Continue_Message: 'Migration continuing'
+      Continue_Confirm_Title: 'Continue Upgrade',
+      Continue_Confirm_Text: 'Do you want to continue upgrade?',
+      Continue_Mask: 'Upgrade continuing',
+      Continue_Message: 'Upgrade continuing'
+    },
+
+    'NX.coreui.migration.PhaseSyncScreen': {
+      Title: 'Synchronizing',
+      Description: '<p>Upgrade is synchronizing changes.</p>',
+      Abort_Button: 'Abort',
+      Continue_Button: 'Continue',
+      Continue_Button_Pending: '<i class="fa fa-spinner fa-spin fa-fw"></i> Continue'
     },
 
     'NX.coreui.migration.PhaseSyncStep': {
       $extend: 'NX.coreui.migration.ProgressStepSupport',
 
-      Abort_Confirm_Title: 'Abort Migration',
-      Abort_Confirm_Text: 'Do you want to abort migration?',
-      Abort_Mask: 'Migration aborting',
-      Abort_Message: 'Migration aborted',
+      Abort_Confirm_Title: 'Abort Upgrade',
+      Abort_Confirm_Text: 'Do you want to abort upgrade?',
+      Abort_Mask: 'Upgrade aborting',
+      Abort_Message: 'Upgrade aborted',
 
-      Finish_Confirm_Title: 'Finish Migration',
-      Finish_Confirm_Text: 'Do you want to finish migration?',
-      Finish_Mask: 'Migration finishing',
-      Finish_Message: 'Migration finishing'
+      Stop_Waiting_Confirm_Title: 'Stop waiting for changes',
+      Stop_Waiting_Confirm_Text: 'Any future changes to repositories will not be synchronized. Proceed?',
+      Stop_Waiting_Confirm_Mask: 'Finalizing changes',
+      Stop_Waiting_Confirm_Message: 'Changes finalized',
+
+      Finish_Mask: 'Upgrade finishing',
+      Finish_Message: 'Upgrade finishing'
     },
 
     'NX.coreui.migration.PhaseFinishStep': {
       $extend: 'NX.coreui.migration.ProgressStepSupport',
 
+      Abort_Confirm_Title: 'Abort Upgrade',
+      Abort_Confirm_Text: 'Do you want to abort upgrade?',
+      Abort_Mask: 'Upgrade aborting',
+      Abort_Message: 'Upgrade aborted',
+
       Done_Mask: 'Confirming',
-      Done_Message: 'Migration done'
+      Done_Message: 'Upgrade done'
     },
 
     'NX.coreui.audit.AuditController': {

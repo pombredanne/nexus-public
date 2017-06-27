@@ -12,6 +12,8 @@
  */
 package org.sonatype.nexus.repository.storage;
 
+import java.io.IOException;
+import java.io.InputStream;
 import java.util.HashMap;
 
 import javax.annotation.Nonnull;
@@ -21,26 +23,34 @@ import javax.inject.Provider;
 import javax.validation.constraints.NotNull;
 import javax.validation.groups.Default;
 
+import org.sonatype.nexus.blobstore.api.Blob;
 import org.sonatype.nexus.blobstore.api.BlobStore;
 import org.sonatype.nexus.blobstore.api.BlobStoreManager;
 import org.sonatype.nexus.common.collect.NestedAttributesMap;
-import org.sonatype.nexus.common.node.LocalNodeAccess;
+import org.sonatype.nexus.common.event.EventHelper;
+import org.sonatype.nexus.common.hash.HashAlgorithm;
+import org.sonatype.nexus.common.hash.MultiHashingInputStream;
+import org.sonatype.nexus.common.node.NodeAccess;
 import org.sonatype.nexus.common.stateguard.Guarded;
 import org.sonatype.nexus.common.stateguard.StateGuardAspect;
 import org.sonatype.nexus.orient.DatabaseInstance;
 import org.sonatype.nexus.repository.FacetSupport;
 import org.sonatype.nexus.repository.config.Configuration;
 import org.sonatype.nexus.repository.config.ConfigurationFacet;
+import org.sonatype.nexus.repository.storage.internal.StorageFacetManager;
 import org.sonatype.nexus.repository.types.HostedType;
+import org.sonatype.nexus.repository.view.Payload;
 import org.sonatype.nexus.security.ClientInfo;
 import org.sonatype.nexus.security.ClientInfoProvider;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Supplier;
+import com.google.common.collect.ImmutableMap;
 import com.orientechnologies.orient.core.db.document.ODatabaseDocumentTx;
 import org.hibernate.validator.constraints.NotEmpty;
 
 import static com.google.common.base.Preconditions.checkNotNull;
+import static org.sonatype.nexus.orient.transaction.OrientTransactional.inTxRetry;
 import static org.sonatype.nexus.repository.FacetSupport.State.ATTACHED;
 import static org.sonatype.nexus.repository.FacetSupport.State.INITIALISED;
 import static org.sonatype.nexus.repository.FacetSupport.State.STARTED;
@@ -51,12 +61,12 @@ import static org.sonatype.nexus.repository.storage.MetadataNodeEntityAdapter.P_
  *
  * @since 3.0
  */
-@Named
+@Named("default")
 public class StorageFacetImpl
     extends FacetSupport
     implements StorageFacet
 {
-  private final LocalNodeAccess localNodeAccess;
+  private final NodeAccess nodeAccess;
 
   private final BlobStoreManager blobStoreManager;
 
@@ -73,6 +83,10 @@ public class StorageFacetImpl
   private final ContentValidatorSelector contentValidatorSelector;
 
   private final MimeRulesSourceSelector mimeRulesSourceSelector;
+
+  private final Supplier<StorageTx> txSupplier;
+
+  private final StorageFacetManager storageFacetManager;
 
   @VisibleForTesting
   static final String CONFIG_KEY = "storage";
@@ -106,7 +120,7 @@ public class StorageFacetImpl
   private WritePolicySelector writePolicySelector;
 
   @Inject
-  public StorageFacetImpl(final LocalNodeAccess localNodeAccess,
+  public StorageFacetImpl(final NodeAccess nodeAccess,
                           final BlobStoreManager blobStoreManager,
                           @Named(ComponentDatabase.NAME) final Provider<DatabaseInstance> databaseInstanceProvider,
                           final BucketEntityAdapter bucketEntityAdapter,
@@ -114,9 +128,10 @@ public class StorageFacetImpl
                           final AssetEntityAdapter assetEntityAdapter,
                           final ClientInfoProvider clientInfoProvider,
                           final ContentValidatorSelector contentValidatorSelector,
-                          final MimeRulesSourceSelector mimeRulesSourceSelector)
+                          final MimeRulesSourceSelector mimeRulesSourceSelector,
+                          final StorageFacetManager storageFacetManager)
   {
-    this.localNodeAccess = checkNotNull(localNodeAccess);
+    this.nodeAccess = checkNotNull(nodeAccess);
     this.blobStoreManager = checkNotNull(blobStoreManager);
     this.databaseInstanceProvider = checkNotNull(databaseInstanceProvider);
 
@@ -126,6 +141,9 @@ public class StorageFacetImpl
     this.clientInfoProvider = checkNotNull(clientInfoProvider);
     this.contentValidatorSelector = checkNotNull(contentValidatorSelector);
     this.mimeRulesSourceSelector = checkNotNull(mimeRulesSourceSelector);
+    this.storageFacetManager = checkNotNull(storageFacetManager);
+
+    this.txSupplier = () -> openStorageTx(databaseInstanceProvider.get().acquire());
   }
 
   @Override
@@ -143,33 +161,23 @@ public class StorageFacetImpl
 
   @Override
   protected void doInit(final Configuration configuration) throws Exception {
-    initSchema();
     initBucket();
     writePolicySelector = WritePolicySelector.DEFAULT;
     super.doInit(configuration);
   }
 
-  private void initSchema() {
-    try (ODatabaseDocumentTx db = databaseInstanceProvider.get().connect()) {
-      bucketEntityAdapter.register(db);
-      componentEntityAdapter.register(db);
-      assetEntityAdapter.register(db);
-    }
-  }
-
   private void initBucket() {
     // get or create the bucket for the repository and set bucketId for fast lookup later
-    try (ODatabaseDocumentTx db = databaseInstanceProvider.get().acquire()) {
+    inTxRetry(databaseInstanceProvider).run(db -> {
       String repositoryName = getRepository().getName();
-      bucket = bucketEntityAdapter.read.execute(db, repositoryName);
+      bucket = bucketEntityAdapter.read(db, repositoryName);
       if (bucket == null) {
         bucket = new Bucket();
         bucket.setRepositoryName(repositoryName);
         bucket.attributes(new NestedAttributesMap(P_ATTRIBUTES, new HashMap<>()));
         bucketEntityAdapter.addEntity(db, bucket);
-        db.commit();
       }
-    }
+    });
   }
 
   @Override
@@ -179,11 +187,9 @@ public class StorageFacetImpl
 
   @Override
   protected void doDelete() throws Exception {
-    // TODO: Make this a soft delete and cleanup later so it doesn't block for large repos.
-    try (StorageTx tx = openStorageTx(databaseInstanceProvider.get().acquire())) {
-      tx.begin();
-      tx.deleteBucket(tx.findBucket(getRepository()));
-      tx.commit();
+    // skip when replicating, origin node will delete the bucket blobs
+    if (!EventHelper.isReplicating()) {
+      storageFacetManager.enqueueDeletion(getRepository(), blobStoreManager.get(config.blobStoreName), bucket);
     }
   }
 
@@ -197,12 +203,30 @@ public class StorageFacetImpl
   @Override
   @Guarded(by = STARTED)
   public Supplier<StorageTx> txSupplier() {
-    return new Supplier<StorageTx>()
-    {
-      public StorageTx get() {
-        return openStorageTx(databaseInstanceProvider.get().acquire());
-      }
-    };
+    return txSupplier;
+  }
+
+  @Override
+  public TempBlob createTempBlob(final InputStream inputStream, final Iterable<HashAlgorithm> hashAlgorithms) {
+    BlobStore blobStore = checkNotNull(blobStoreManager.get(config.blobStoreName));
+    MultiHashingInputStream hashingStream = new MultiHashingInputStream(hashAlgorithms, inputStream);
+    Blob blob = blobStore.create(hashingStream,
+        ImmutableMap.of(
+            BlobStore.BLOB_NAME_HEADER, "temp",
+            BlobStore.CREATED_BY_HEADER, createdBy(),
+            BlobStore.TEMPORARY_BLOB_HEADER, ""));
+    return new TempBlob(blob, hashingStream.hashes(), true, blobStore);
+  }
+
+  @Override
+  public TempBlob createTempBlob(final Payload payload, final Iterable<HashAlgorithm> hashAlgorithms)
+  {
+    try (InputStream inputStream = payload.openInputStream()) {
+      return createTempBlob(inputStream, hashAlgorithms);
+    }
+    catch (IOException e) {
+      throw new RuntimeException(e);
+    }
   }
 
   /**
@@ -223,7 +247,7 @@ public class StorageFacetImpl
     return StateGuardAspect.around(
         new StorageTxImpl(
             createdBy(),
-            new BlobTx(localNodeAccess, blobStore),
+            new BlobTx(nodeAccess, blobStore),
             db,
             bucket,
             config.writePolicy == null ? WritePolicy.ALLOW : config.writePolicy,

@@ -20,7 +20,7 @@
   <parent>
     <groupId>org.sonatype.nexus.buildsupport</groupId>
     <artifactId>nexus-buildsupport</artifactId>
-    <version>3.1.0-SNAPSHOT</version>
+    <version>3.4.0-SNAPSHOT</version>
   </parent>
 
   <artifactId>nexus-buildsupport-db</artifactId>
@@ -28,7 +28,8 @@
   <packaging>pom</packaging>
 
   <properties>
-    <orientdb.version>2.1.15</orientdb.version>
+    <orientdb.version>2.2.22</orientdb.version>
+    <hazelcast.version>3.6.6</hazelcast.version>
   </properties>
 
   <dependencyManagement>
@@ -128,19 +129,32 @@
       <dependency>
         <groupId>com.hazelcast</groupId>
         <artifactId>hazelcast</artifactId>
-        <version>3.5.3</version>
+        <version>${hazelcast.version}</version>
+      </dependency>
+
+      <dependency>
+        <groupId>com.hazelcast</groupId>
+        <artifactId>hazelcast</artifactId>
+        <version>${hazelcast.version}</version>
+        <classifier>tests</classifier>
+      </dependency>
+
+      <dependency>
+        <groupId>com.hazelcast</groupId>
+        <artifactId>hazelcast-cloud</artifactId>
+        <version>${hazelcast.version}</version>
       </dependency>
 
       <dependency>
         <groupId>net.java.dev.jna</groupId>
         <artifactId>jna</artifactId>
-        <version>4.0.0</version>
+        <version>4.1.0</version>
       </dependency>
 
       <dependency>
         <groupId>net.java.dev.jna</groupId>
         <artifactId>jna-platform</artifactId>
-        <version>4.0.0</version>
+        <version>4.1.0</version>
       </dependency>
 
     </dependencies>

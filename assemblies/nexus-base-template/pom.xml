@@ -21,7 +21,7 @@
   <parent>
     <groupId>org.sonatype.nexus.assemblies</groupId>
     <artifactId>nexus-assemblies</artifactId>
-    <version>3.1.0-SNAPSHOT</version>
+    <version>3.4.0-SNAPSHOT</version>
   </parent>
 
   <artifactId>nexus-base-template</artifactId>
@@ -29,9 +29,21 @@
   <packaging>karaf-assembly</packaging>
 
   <dependencies>
+    <!--
+    Custom launcher for Nexus
+    -->
     <dependency>
       <groupId>org.sonatype.nexus</groupId>
       <artifactId>nexus-main</artifactId>
+      <scope>provided</scope>
+    </dependency>
+
+    <!--
+    Our preferred OSGi runtime
+    -->
+    <dependency>
+      <groupId>org.apache.felix</groupId>
+      <artifactId>org.apache.felix.framework</artifactId>
       <scope>provided</scope>
     </dependency>
 
@@ -53,17 +65,17 @@
 
     <dependency>
       <groupId>org.sonatype.nexus.assemblies</groupId>
-      <artifactId>nexus-system-feature</artifactId>
+      <artifactId>nexus-startup-feature</artifactId>
       <classifier>features</classifier>
       <type>xml</type>
     </dependency>
 
     <!--
-    Installed features (runtime-scope)
+    Installed/boot features (runtime-scope)
     -->
     <dependency>
       <groupId>org.sonatype.nexus.assemblies</groupId>
-      <artifactId>nexus-jetty-feature</artifactId>
+      <artifactId>nexus-boot-feature</artifactId>
       <classifier>features</classifier>
       <type>xml</type>
       <scope>runtime</scope>
@@ -94,6 +106,15 @@
     </dependency>
 
     <!--
+    Provide access to Swagger-UI
+    -->
+    <dependency>
+      <groupId>org.webjars</groupId>
+      <artifactId>swagger-ui</artifactId>
+      <scope>provided</scope>
+    </dependency>
+
+    <!--
     HACK: expose orientdb distribution to extract studio.zip plugin
     -->
     <dependency>
@@ -108,13 +129,23 @@
         </exclusion>
       </exclusions>
     </dependency>
+
+    <!--
+      Included to get access to nexus-orient-console. This provides a convenience
+      jar for starting up the orientdb console app.
+    -->
+    <dependency>
+      <groupId>org.sonatype.nexus</groupId>
+      <artifactId>nexus-orient-console</artifactId>
+      <scope>provided</scope>
+    </dependency>
   </dependencies>
 
   <build>
     <plugins>
       <plugin>
-        <groupId>org.codehaus.gmaven</groupId>
-        <artifactId>gmaven-plugin</artifactId>
+        <groupId>org.codehaus.gmavenplus</groupId>
+        <artifactId>gmavenplus-plugin</artifactId>
         <executions>
           <execution>
             <id>pax-url-settings</id>
@@ -123,14 +154,16 @@
               <goal>execute</goal>
             </goals>
             <configuration>
-              <source>
-                // workaround https://issues.apache.org/jira/browse/KARAF-4288
-                def settingsFile = session.request.userSettingsFile
-                if (settingsFile?.isFile()) {
-                  // pass custom settings file to pax-url as karaf-maven-plugin may need it to fetch content
-                  System.setProperty('org.ops4j.pax.url.mvn.settings', session.request.userSettingsFile.path)
-                }
-              </source>
+              <scripts>
+                <script>
+                  // workaround https://issues.apache.org/jira/browse/KARAF-4288
+                  def settingsFile = session.request.userSettingsFile
+                  if (settingsFile?.isFile()) {
+                    // pass custom settings file to pax-url as karaf-maven-plugin may need it to fetch content
+                    System.setProperty('org.ops4j.pax.url.mvn.settings', session.request.userSettingsFile.path)
+                  }
+                </script>
+              </scripts>
             </configuration>
           </execution>
         </executions>
@@ -164,6 +197,11 @@
                 <copy file="${org.bouncycastle:bcpg-jdk15on:jar}"
                       todir="${project.build.directory}/assembly/lib"/>
 
+                <!-- put nexus-orient-console in lib/support along with its dependencies -->
+                <copy file="${org.sonatype.nexus:nexus-orient-console:jar}"
+                      tofile="${project.build.directory}/assembly/lib/support/nexus-orient-console.jar"/>
+                <delete dir="${project.build.directory}/assembly/system/org/sonatype/nexus/nexus-orient-console"/>
+
                 <!-- delete some cruft which karaf includes by default -->
                 <delete>
                   <fileset dir="${project.build.directory}/assembly">
@@ -189,30 +227,103 @@
                 <delete dir="${project.build.directory}/assembly/lib/ext"/>
                 <delete dir="${project.build.directory}/assembly/lib/endorsed"/>
 
+                <!-- identify the specific pax-logging API bundle used by nexus-pax-logging backend -->
+                <loadresource property="pax-logging-api">
+                  <string>${org.ops4j.pax.logging:pax-logging-api:jar}</string>
+                  <filterchain>
+                    <replacestring from="${file.separator}" to="/"/>
+                    <replaceregex pattern=".*(pax-logging-api/[^/]*)/.*" replace="\1"/>
+                  </filterchain>
+                </loadresource>
+
+                <!-- remove the other bundles, leaving only the selected API bundle for our backend -->
+                <replaceregexp file="${project.build.directory}/assembly/etc/startup.properties" flags="g"
+                               match=".*org/ops4j/pax/logging/(?!${pax-logging-api}).*\s*" replace=""/>
+                <delete includeemptydirs="true">
+                  <fileset dir="${project.build.directory}/assembly/system/org/ops4j/pax/logging"
+                           excludes="${pax-logging-api}/**"/>
+                </delete>
+
+                <!-- tweak generated karaf feature configuration -->
+                <concat destfile="${project.build.directory}/assembly/etc/org.apache.karaf.features.cfg" append="true">
+                  <string>${line.separator}</string>
+                  <string>
+                    # SONATYPE: disable .cfg store on feature install
+                    configCfgStore=false
+
+                    # SONATYPE: disable automatic updates and retries
+                    serviceRequirements=disable
+                    updateSnapshots=false
+                    scheduleMaxRun=1
+                  </string>
+                  <filterchain>
+                    <trim/>
+                  </filterchain>
+                </concat>
+
+                <!--
+                Include Swagger UI
+                -->
+                <unzip src="${org.webjars:swagger-ui:jar}"
+                       dest="${project.build.directory}/assembly/public/swagger-ui">
+                  <cutdirsmapper dirs="5"/>
+                  <patternset>
+                    <include name="META-INF/resources/webjars/swagger-ui/*/**"/>
+                    <exclude name="**/swagger-ui.js"/>
+                    <exclude name="**/*.gz"/>
+                  </patternset>
+                </unzip>
+                <delete dir="${project.build.directory}/assembly/system/org/webjars"/>
+
+                <!--
+                Customize Swagger UI
+                -->
+                <replace file="${project.build.directory}/assembly/public/swagger-ui/index.html">
+                  <replacefilter token="swagger-ui.js" value="swagger-ui.min.js"/>
+                  <!-- point to local documentation -->
+                  <replacefilter token="http://petstore.swagger.io/v2" value="../service/siesta"/>
+                  <!-- list operations, apply alpha sorting -->
+                  <replacefilter token="docExpansion: &quot;none&quot;"
+                                 value="docExpansion:'list', apisSorter:'alpha', operationsSorter:'alpha'"/>
+                  <!-- remove unused API selector form -->
+                  <replacefilter token="&lt;form" value="&lt;!-- &lt;form"/>
+                  <replacefilter token="form&gt;" value="form&gt; --&gt;"/>
+                </replace>
+
+                <!--
+                HACK: Include orientdb-studio plugin.
+                -->
+                <property name="studio.dir" value="${project.build.directory}/sonatype-work/nexus3/orient/plugins"/>
+                <property name="studio.file" value="${studio.dir}/studio.zip"/>
+                <unzip src="${com.orientechnologies:orientdb-community:zip}" dest="${studio.dir}">
+                  <mergemapper to="studio.zip"/>
+                  <patternset>
+                    <include name="*/plugins/*studio-*.zip"/>
+                  </patternset>
+                </unzip>
+                <!-- ensure that plugin is actually copied -->
+                <available file="${studio.file}" property="studio.exists"/>
+                <fail message="File missing: ${studio.file}" unless="studio.exists"/>
+
+                <!-- move karaf config to etc/karaf -->
+                <move todir="${project.build.directory}/assembly/etc/karaf">
+                  <fileset dir="${project.build.directory}/assembly/etc"/>
+                </move>
+
                 <!-- overlay customizations -->
                 <copy todir="${project.build.directory}/assembly" overwrite="true">
                   <fileset dir="${project.basedir}/src/main/resources/overlay"/>
                 </copy>
 
-                <!-- disable log4j backend so we can use logback -->
-                <replaceregexp file="${project.build.directory}/assembly/etc/startup.properties"
-                               match="(.*pax-logging-service.*)" replace="# \1"/>
+                <!-- sonatype-work placeholders/templates -->
+                <copy todir="${project.build.directory}/sonatype-work" overwrite="true">
+                  <fileset dir="${project.basedir}/src/main/resources/sonatype-work"/>
+                </copy>
 
-                <!-- disable automatic updates and retries -->
-                <concat destfile="${project.build.directory}/assembly/etc/org.apache.karaf.features.cfg" append="true">
-                  serviceRequirements=disable${line.separator}updateSnapshots=false${line.separator}scheduleMaxRun=1
-                </concat>
+                <!-- workaround maven-assembly-plugin bug where lineEnding configuration for fileSets is ineffective -->
+                <fixcrlf srcdir="${project.build.directory}/assembly/bin" includes="*" excludes="*.bat" eol="unix"/>
+                <fixcrlf srcdir="${project.build.directory}/assembly/bin" includes="*.bat" eol="dos"/>
 
-                <!--
-                HACK: Include orientdb-studio plugin.
-                -->
-                <unzip src="${com.orientechnologies:orientdb-community:zip}"
-                       dest="${project.build.directory}/assembly/data/orient/plugins">
-                  <mergemapper to="studio.zip"/>
-                  <patternset>
-                    <include name="*/plugins/studio-*.zip"/>
-                  </patternset>
-                </unzip>
               </target>
             </configuration>
           </execution>
@@ -230,11 +341,10 @@
           <includeBuildOutputDirectory>false</includeBuildOutputDirectory>
           <!-- override expected osgi.ee to match compilation target -->
           <javase>1.8</javase>
+          <!-- install startup jars 'by-reference' which avoids copying -->
+          <useReferenceUrls>true</useReferenceUrls>
           <startupFeatures>
             <feature>wrap</feature>
-            <feature>nexus-system-feature</feature>
-          </startupFeatures>
-          <bootFeatures>
             <feature>bundle</feature>
             <feature>config</feature>
             <feature>diagnostic</feature>
@@ -245,7 +355,10 @@
             <feature>shell</feature>
             <feature>service</feature>
             <feature>system</feature>
-            <feature>nexus-jetty-feature</feature>
+            <feature>nexus-startup-feature</feature>
+          </startupFeatures>
+          <bootFeatures>
+            <feature>nexus-boot-feature</feature>
           </bootFeatures>
           <installedFeatures>
             <feature>management</feature>

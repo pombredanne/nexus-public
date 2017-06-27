@@ -47,20 +47,17 @@ Ext.define('NX.util.Validator', {
   nxEmailRegex : /^(")?(?:[^\."])(?:(?:[\.])?(?:[\w\-!#$%&'*+/=?^_`{|}~]))*\1@(\w[\-\w]*\.){1,5}([A-Za-z]){2,60}$/,
 
   /**
+   * A regular expression to detect a valid hostname according to RFC 1123.
+   * See also http-headers-patterns.properties and HostnameValidator.java for other uses of this regex.
    * @private
    */
-  vtypes : [
-    {
-      'nx-name': function(val) {
-        return NX.util.Validator.nxNameRegex.test(val);
-      },
-      'nx-nameText': NX.I18n.get('Util_Validator_Text'),
-      'nx-email': function(val) {
-        return NX.util.Validator.nxEmailRegex.test(val);
-      },
-      'nx-emailText': Ext.form.field.VTypes.emailText
-    }
-  ],
+  nxRfc1123HostRegex: new RegExp(
+    "^(((([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5]))|" +
+     "(\\[(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\\])|" +
+     "(\\[((?:[0-9A-Fa-f]{1,4}(?::[0-9A-Fa-f]{1,4})*)?)::((?:[0-9A-Fa-f]{1,4}(?::[0-9A-Fa-f]{1,4})*)?)\\])|" +
+     "(([a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9\\-]*[a-zA-Z0-9])\\.)*([A-Za-z0-9]|" +
+     "[A-Za-z0-9][A-Za-z0-9\\-]*[A-Za-z0-9]))(:([0-9]+))?$"
+  ),
 
   /**
    * @public
@@ -72,6 +69,23 @@ Ext.define('NX.util.Validator', {
 
   constructor: function () {
     var me = this;
+
+    me.vtypes = [
+      {
+        'nx-name': function(val) {
+          return NX.util.Validator.nxNameRegex.test(val);
+        },
+        'nx-nameText': NX.I18n.get('Util_Validator_Text'),
+        'nx-email': function(val) {
+          return NX.util.Validator.nxEmailRegex.test(val);
+        },
+        'nx-emailText': Ext.form.field.VTypes.emailText,
+        'nx-hostname': function(val) {
+          return NX.util.Validator.nxRfc1123HostRegex.test(val);
+        },
+        'nx-hostnameText': NX.I18n.get('Util_Validator_Hostname')
+      }
+    ];
 
     Ext.each(me.vtypes, function(vtype) {
       me.registerVtype(vtype);
@@ -88,11 +102,22 @@ Ext.define('NX.util.Validator', {
    * @returns {boolean}
    */
   isURL: function (str, options) {
-    if (!str || str.length >= 2083) {
-      return false;
-    }
+
+    // Apply options
     options = options || {};
     options = Ext.applyIf(options, this.default_url_options);
+
+    // Short-circuit when empty
+    if (Ext.isEmpty(str)) {
+      return options.allow_blank;
+    }
+
+    // Ensure that the URL is of proper length
+    if (str.length >= 2083) {
+      return false;
+    }
+
+    // Check the URL syntax
     var separators = '-?-?' + (options.allow_underscores ? '_?' : '');
     var url = new RegExp('^(?!mailto:)(?:(?:' + options.protocols.join('|') + ')://)' +
         (options.require_protocol ? '' : '?') +
@@ -100,9 +125,9 @@ Ext.define('NX.util.Validator', {
         separators + ')*[a-z\\u00a1-\\uffff0-9]+)(?:\\.(?:[a-z\\u00a1-\\uffff0-9]+' + separators +
         ')*[a-z\\u00a1-\\uffff0-9]+)*(?:\\.(?:[a-z\\u00a1-\\uffff]{1,}))' + (options.require_tld ? '' : '?') +
         ')|localhost)(?::(\\d{1,5}))?(?:(?:/|\\?|#)[^\\s]*)?$', 'i');
-
     var match = str.match(url),
         port = match ? match[1] : 0;
+
     return !!(match && (!port || (port > 0 && port <= 65535)));
   }
 

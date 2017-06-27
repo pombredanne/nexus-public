@@ -51,6 +51,7 @@ Ext.define('NX.coreui.controller.Privileges', {
     {ref: 'feature', selector: 'nx-coreui-privilege-feature'},
     {ref: 'content', selector: 'nx-feature-content' },
     {ref: 'list', selector: 'nx-coreui-privilege-list'},
+    {ref: 'searchBox', selector: 'nx-coreui-privilege-list nx-searchbox'},
     {ref: 'settings', selector: 'nx-coreui-privilege-feature nx-coreui-privilege-settings'}
   ],
   icons: {
@@ -74,7 +75,7 @@ Ext.define('NX.coreui.controller.Privileges', {
       file: 'database_red.png',
       variants: ['x16', 'x32']
     },
-    'privilege-repository-content': {
+    'privilege-repository-content-selector': {
       file: 'content_selector.png',
       variants: ['x16', 'x32']
     },
@@ -87,21 +88,6 @@ Ext.define('NX.coreui.controller.Privileges', {
       variants: ['x16', 'x32']
     }
   },
-  features: {
-    mode: 'admin',
-    path: '/Security/Privileges',
-    text: NX.I18n.get('Privileges_Text'),
-    description: NX.I18n.get('Privileges_Description'),
-    view: {xtype: 'nx-coreui-privilege-feature'},
-    iconConfig: {
-      file: 'medal_gold_green.png',
-      variants: ['x16', 'x32']
-    },
-    visible: function () {
-      return NX.Permissions.check('nexus:privileges:read');
-    },
-    weight: 10
-  },
 
   permission: 'nexus:privileges',
 
@@ -110,6 +96,22 @@ Ext.define('NX.coreui.controller.Privileges', {
    */
   init: function() {
     var me = this;
+
+    me.features = {
+      mode: 'admin',
+      path: '/Security/Privileges',
+      text: NX.I18n.get('Privileges_Text'),
+      description: NX.I18n.get('Privileges_Description'),
+      view: {xtype: 'nx-coreui-privilege-feature'},
+      iconConfig: {
+        file: 'medal_gold_green.png',
+        variants: ['x16', 'x32']
+      },
+      visible: function() {
+        return NX.Permissions.check('nexus:privileges:read');
+      },
+      weight: 10
+    };
 
     me.callParent();
 
@@ -121,7 +123,10 @@ Ext.define('NX.coreui.controller.Privileges', {
       },
       store: {
         '#Privilege': {
-          load: me.reselect
+          load: function() {
+            me.reselect(arguments);
+            me.getSearchBox().focus();
+          }
         }
       },
       component: {

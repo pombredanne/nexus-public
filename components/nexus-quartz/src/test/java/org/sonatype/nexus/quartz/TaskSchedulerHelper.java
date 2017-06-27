@@ -21,12 +21,16 @@ import javax.inject.Inject;
 import org.sonatype.goodies.testsupport.TestUtil;
 import org.sonatype.nexus.common.app.ApplicationDirectories;
 import org.sonatype.nexus.common.app.BaseUrlManager;
-import org.sonatype.nexus.common.event.EventBus;
-import org.sonatype.nexus.common.node.LocalNodeAccess;
+import org.sonatype.nexus.common.event.EventManager;
+import org.sonatype.nexus.common.node.NodeAccess;
+import org.sonatype.nexus.common.stateguard.StateGuardModule;
 import org.sonatype.nexus.orient.DatabaseInstance;
+import org.sonatype.nexus.quartz.internal.orient.JobStoreImpl;
 import org.sonatype.nexus.scheduling.TaskScheduler;
 import org.sonatype.nexus.scheduling.spi.SchedulerSPI;
+import org.sonatype.nexus.testcommon.event.SimpleEventManager;
 
+import com.google.common.collect.ImmutableSet;
 import com.google.inject.Guice;
 import com.google.inject.Injector;
 import com.google.inject.Module;
@@ -64,13 +68,15 @@ public class TaskSchedulerHelper
   private SchedulerSPI scheduler;
 
   @Inject
-  private EventBus eventBus;
+  private JobStoreImpl jobStore;
+
+  private EventManager eventManager;
 
   private ApplicationDirectories applicationDirectories;
 
   private BaseUrlManager baseUrlManager;
 
-  private LocalNodeAccess localNodeAccess;
+  private NodeAccess nodeAccess;
 
   private final DatabaseInstance databaseInstance;
 
@@ -79,9 +85,10 @@ public class TaskSchedulerHelper
   }
 
   public void init(@Nullable final Integer poolSize, @Nullable final JobFactory factory) throws Exception {
+    eventManager = new SimpleEventManager();
     applicationDirectories = mock(ApplicationDirectories.class);
     baseUrlManager = mock(BaseUrlManager.class);
-    localNodeAccess = mock(LocalNodeAccess.class);
+    nodeAccess = mock(NodeAccess.class);
 
     Module module = binder -> {
       Properties properties = new Properties();
@@ -91,6 +98,8 @@ public class TaskSchedulerHelper
       }
       binder.bind(ParameterKeys.PROPERTIES)
           .toInstance(properties);
+
+      binder.bind(EventManager.class).toInstance(eventManager);
 
       File workDir = util.createTempDir(util.getTargetDir(), "workdir");
       when(applicationDirectories.getWorkDirectory(anyString())).thenReturn(workDir);
@@ -104,22 +113,24 @@ public class TaskSchedulerHelper
           .annotatedWith(Names.named("config"))
           .toInstance(databaseInstance);
 
-      when(localNodeAccess.getId()).thenReturn("test-12345");
-      binder.bind(LocalNodeAccess.class)
-          .toInstance(localNodeAccess);
+      when(nodeAccess.getId()).thenReturn("test-12345");
+      when(nodeAccess.getMemberIds()).thenReturn(ImmutableSet.of("test-12345"));
+      binder.bind(NodeAccess.class)
+          .toInstance(nodeAccess);
       if (factory != null) {
         binder.bind(JobFactory.class).toInstance(factory);
       }
     };
 
     this.injector = Guice.createInjector(new WireModule(
-        module,
+        module, new StateGuardModule(),
         new SpaceModule(new URLClassSpace(TaskSchedulerHelper.class.getClassLoader()), BeanScanning.INDEX)
     ));
     injector.injectMembers(this);
   }
 
   public void start() throws Exception {
+    jobStore.start();
     scheduler.start();
     scheduler.resume();
   }
@@ -127,6 +138,8 @@ public class TaskSchedulerHelper
   public void stop() throws Exception {
     scheduler.pause();
     scheduler.stop();
+    jobStore.stop();
+
     locator.clear();
   }
 
@@ -138,7 +151,7 @@ public class TaskSchedulerHelper
     return scheduler;
   }
 
-  public EventBus getEventBus() {
-    return eventBus;
+  public EventManager getEventManager() {
+    return eventManager;
   }
 }

@@ -23,7 +23,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.sonatype.goodies.testsupport.TestSupport;
-import org.sonatype.nexus.orient.DatabaseInstanceRule;
+import org.sonatype.nexus.orient.testsupport.DatabaseInstanceRule;
 import org.sonatype.nexus.quartz.TaskSchedulerHelper;
 
 import com.google.common.base.Throwables;
@@ -68,7 +68,7 @@ public class SchedulerTest
     extends TestSupport
 {
   @Rule
-  public DatabaseInstanceRule database = new DatabaseInstanceRule("test");
+  public DatabaseInstanceRule database = DatabaseInstanceRule.inMemory("test");
 
   public TaskSchedulerHelper taskSchedulerHelper;
 
@@ -128,7 +128,8 @@ public class SchedulerTest
       return ((QuartzSchedulerSPI) taskSchedulerHelper.getScheduler()).getScheduler();
     }
     catch (Exception e) {
-      throw Throwables.propagate(e);
+      Throwables.throwIfUnchecked(e);
+      throw new RuntimeException(e);
     }
   }
 

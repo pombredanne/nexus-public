@@ -16,11 +16,11 @@ import java.io.File;
 import java.net.HttpURLConnection;
 import java.net.URI;
 import java.net.URL;
-import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Callable;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import javax.inject.Inject;
 import javax.inject.Named;
@@ -36,6 +36,7 @@ import org.sonatype.nexus.scheduling.TaskScheduler;
 
 import com.google.common.base.Joiner;
 import com.google.common.base.Throwables;
+import com.google.common.collect.Range;
 import com.google.common.util.concurrent.Uninterruptibles;
 import org.junit.After;
 import org.junit.Before;
@@ -51,6 +52,8 @@ import org.ops4j.pax.exam.junit.PaxExam;
 import org.ops4j.pax.exam.karaf.options.KarafDistributionConfigurationFileExtendOption;
 import org.ops4j.pax.exam.options.MavenUrlReference;
 import org.ops4j.pax.exam.options.ProvisionOption;
+import org.ops4j.pax.exam.spi.reactors.ExamReactorStrategy;
+import org.ops4j.pax.exam.spi.reactors.PerClass;
 import org.slf4j.Logger;
 
 import static com.google.common.base.Preconditions.checkNotNull;
@@ -60,7 +63,7 @@ import static org.ops4j.pax.exam.CoreOptions.mavenBundle;
 import static org.ops4j.pax.exam.CoreOptions.propagateSystemProperty;
 import static org.ops4j.pax.exam.CoreOptions.systemProperty;
 import static org.ops4j.pax.exam.CoreOptions.systemTimeout;
-import static org.ops4j.pax.exam.CoreOptions.vmOptions;
+import static org.ops4j.pax.exam.CoreOptions.vmOption;
 import static org.ops4j.pax.exam.CoreOptions.when;
 import static org.ops4j.pax.exam.CoreOptions.wrappedBundle;
 import static org.ops4j.pax.exam.karaf.options.KarafDistributionOption.*;
@@ -83,10 +86,9 @@ import static org.ops4j.pax.exam.karaf.options.KarafDistributionOption.*;
  * @since 3.0
  */
 @RunWith(PaxExam.class)
+@ExamReactorStrategy(PerClass.class)
 public abstract class NexusPaxExamSupport
 {
-  public static final String BASEDIR = new File(System.getProperty("basedir", "")).getAbsolutePath();
-
   public static final String NEXUS_PAX_EXAM_TIMEOUT_KEY = "nexus.pax.exam.timeout";
 
   public static final int NEXUS_PAX_EXAM_TIMEOUT_DEFAULT = 300000;
@@ -97,19 +99,46 @@ public abstract class NexusPaxExamSupport
 
   public static final int NEXUS_TEST_START_LEVEL = 200;
 
+  public static final String NEXUS_PROPERTIES_FILE = "etc/nexus-default.properties";
+
+  public static final String KARAF_CONFIG_PROPERTIES_FILE = "etc/karaf/config.properties";
+
+  public static final String SYSTEM_PROPERTIES_FILE = "etc/karaf/system.properties";
+
+  public static final String PAX_URL_MAVEN_FILE = "etc/karaf/org.ops4j.pax.url.mvn.cfg";
+
+  public static final String KARAF_MANAGEMENT_FILE = "etc/karaf/org.apache.karaf.management.cfg";
+
+  private static final String PORT_REGISTRY_MIN_KEY = "it.portRegistry.min";
+
+  private static final String PORT_REGISTRY_MAX_KEY = "it.portRegistry.max";
+
+  // port range 10000-30000 chosen to not overlap with typical range for ephemeral ports
+
+  private static final int PORT_REGISTRY_MIN_MAIN = 10000;
+
+  private static final int PORT_REGISTRY_MAX_MAIN = 24999;
+
+  private static final int PORT_REGISTRY_MIN_FORK = PORT_REGISTRY_MAX_MAIN + 1;
+
+  private static final int PORT_REGISTRY_MAX_FORK = 30000;
+
   // -------------------------------------------------------------------------
 
   @Rule
   public final TestDataRule testData = new TestDataRule(resolveBaseFile("src/test/it-resources"));
 
   @Rule
-  public final TestIndexRule testIndex = new TestIndexRule(resolveBaseFile("target/it-reports"),
-      resolveBaseFile("target/it-data"));
+  @Inject
+  public TestIndexRule testIndex;
+
+  @Rule
+  public final TestCleaner testCleaner = new TestCleaner();
 
   @Rule
   public final ExpectedException thrown = ExpectedException.none();
 
-  public static final PortRegistry portRegistry = new PortRegistry();
+  public static final PortRegistry portRegistry = createPortRegistry();
 
   @Inject
   @Named("http://localhost:${application-port}${nexus-context-path}")
@@ -134,13 +163,19 @@ public abstract class NexusPaxExamSupport
     return Loggers.getLogger(this);
   }
 
+  private static PortRegistry createPortRegistry() {
+    int portMin = Integer.getInteger(PORT_REGISTRY_MIN_KEY, PORT_REGISTRY_MIN_MAIN);
+    int portMax = Integer.getInteger(PORT_REGISTRY_MAX_KEY, PORT_REGISTRY_MAX_MAIN);
+    return new PortRegistry(portMin, portMax, 60 * 1000);
+  }
+
   // -------------------------------------------------------------------------
 
   /**
    * Resolves path against the basedir of the surrounding Maven project.
    */
   public static File resolveBaseFile(final String path) {
-    return Paths.get(BASEDIR, path).toFile();
+    return TestBaseDir.resolve(path);
   }
 
   /**
@@ -174,7 +209,8 @@ public abstract class NexusPaxExamSupport
       return URI.create(url + "/" + path).normalize().toURL();
     }
     catch (final Exception e) {
-      throw Throwables.propagate(e);
+      Throwables.throwIfUnchecked(e);
+      throw new RuntimeException(e);
     }
   }
 
@@ -195,22 +231,29 @@ public abstract class NexusPaxExamSupport
   /**
    * Periodically polls function until it returns {@code true} or 30 seconds have elapsed.
    *
-   * @throws InterruptedException if the thread is interrupted or the timeout exceeded
+   * @throws InterruptedException if the thread is interrupted
+   * @throws TimeoutException if the timeout exceeded
    */
-  public static void waitFor(final Callable<Boolean> function) throws InterruptedException {
+  public static void waitFor(final Callable<Boolean> function) // NOSONAR
+      throws InterruptedException, TimeoutException
+  {
     waitFor(function, 30000);
   }
 
   /**
    * Periodically polls function until it returns {@code true} or the timeout has elapsed.
    *
-   * @throws InterruptedException if the thread is interrupted or the timeout exceeded
+   * @throws InterruptedException if the thread is interrupted
+   * @throws TimeoutException if the timeout exceeded
    */
-  public static void waitFor(final Callable<Boolean> function, final long millis) throws InterruptedException {
+  public static void waitFor(final Callable<Boolean> function, final long millis) // NOSONAR
+      throws InterruptedException, TimeoutException
+  {
     Exception functionEvaluationException = null;
 
     Thread.yield();
-    for (int i = 0; i < millis / 100; i++) {
+    long end = System.currentTimeMillis() + millis;
+    do {
       try {
         if (Boolean.TRUE.equals(function.call())) {
           return; // success
@@ -227,7 +270,10 @@ public abstract class NexusPaxExamSupport
         Thread.sleep(100);
       }
     }
-    throw (InterruptedException) new InterruptedException().initCause(functionEvaluationException);
+    while (System.currentTimeMillis() <= end);
+    Loggers.getLogger(NexusPaxExamSupport.class).warn("Timed out waiting for {} after {} ms", function, millis);
+    throw (TimeoutException) new TimeoutException("Condition still unsatisfied after " + millis + " ms")
+        .initCause(functionEvaluationException);
   }
 
   /**
@@ -322,24 +368,42 @@ public abstract class NexusPaxExamSupport
       frameworkZip.classifier(System.getProperty("it.nexus.bundle.classifier"));
     }
 
+    // enable JDWP debugging which will suspend the IT and wait on port 5005
     boolean debugging = Boolean.parseBoolean(System.getProperty("it.debug"));
 
     // allow overriding of the out-of-the-box logback configuration
-    File logbackProperties = resolveBaseFile("target/test-classes/logback.properties");
-    File logbackNexusXml = resolveBaseFile("target/test-classes/logback-nexus.xml");
+    File logbackXml = resolveBaseFile("target/test-classes/logback-test.xml");
+    String logLevel = System.getProperty("it.test.log.level", "INFO");
+
+    // block ports which might be taken by Pax-Exam RMI
+    portRegistry.blockPorts(Range.closed(21000, 21099));
 
     return composite(
-        vmOptions("-Xmx400m"), // taken from testsuite config
 
-        vmOptions("-Djava.io.tmpdir=" + System.getProperty("java.io.tmpdir")),
+        // mimic nexus script
+        vmOption("-Xms600M"),
+        vmOption("-Xmx600M"),
+        vmOption("-XX:MaxDirectMemorySize=2G"),
+        vmOption("-XX:+UnlockDiagnosticVMOptions"),
+        vmOption("-XX:+UnsyncloadClass"),
+
+        vmOption("-Djava.io.tmpdir=" + System.getProperty("java.io.tmpdir")),
 
         systemTimeout(examTimeout()),
 
         propagateSystemProperty(NEXUS_PAX_EXAM_TIMEOUT_KEY),
+        propagateSystemProperty(TestCleaner.CLEAN_ON_SUCCESS_KEY),
 
-        systemProperty("basedir").value(BASEDIR),
+        systemProperty("basedir").value(TestBaseDir.get()),
+
+        // Pax-Exam cuts the leading directory from all archive paths when unpacking,
+        // so 'sonatype-work/nexus3' ends up as 'nexus3' under the base.
+
+        // Karaf specific configuration is now under 'etc/karaf' relative to the base.
 
         karafDistributionConfiguration() //
+            .karafData("nexus3") //
+            .karafEtc("etc/karaf") //
             .karafMain("org.sonatype.nexus.karaf.NexusMain") //
             .karafVersion("4") //
             .frameworkUrl(frameworkZip) //
@@ -354,10 +418,10 @@ public abstract class NexusPaxExamSupport
 
         keepRuntimeFolder(), // keep files around in case we need to debug
 
-        editConfigurationFilePut("etc/org.ops4j.pax.url.mvn.cfg", // so pax-exam can fetch its feature
+        editConfigurationFilePut(PAX_URL_MAVEN_FILE, // so pax-exam can fetch its feature
             "org.ops4j.pax.url.mvn.repositories", "https://repo1.maven.org/maven2@id=central"),
 
-        editConfigurationFilePut("etc/org.ops4j.pax.url.mvn.cfg", // so we can fetch local snapshots
+        editConfigurationFilePut(PAX_URL_MAVEN_FILE, // so we can fetch local snapshots
             "org.ops4j.pax.url.mvn.localRepository", localRepo),
 
         useOwnKarafExamSystemConfiguration("nexus"),
@@ -368,19 +432,27 @@ public abstract class NexusPaxExamSupport
         wrappedBundle(maven("org.hamcrest", "hamcrest-library").versionAsInProject()) //
             .instructions("Fragment-Host=org.ops4j.pax.tipi.hamcrest.core"),
 
-        when(logbackProperties.canRead()).useOptions( //
-            replaceConfigurationFile("data/logback/logback.properties", logbackProperties)),
-        when(logbackNexusXml.canRead()).useOptions( //
-            replaceConfigurationFile("data/logback/logback-nexus.xml", logbackNexusXml)),
+        when(logbackXml.canRead()).useOptions( //
+            replaceConfigurationFile("etc/logback/logback.xml", logbackXml)),
+
+        systemProperty("root.level").value(logLevel),
+
+        // disable unused shutdown port, one port less that could clash with reserved ports
+        editConfigurationFilePut(KARAF_CONFIG_PROPERTIES_FILE, //
+            "karaf.shutdown.port", "-1"),
+
+        // configure port registry of forked JVM to use a different port range than main JVM driving the test
+        systemProperty(PORT_REGISTRY_MIN_KEY).value(Integer.toString(PORT_REGISTRY_MIN_FORK)),
+        systemProperty(PORT_REGISTRY_MAX_KEY).value(Integer.toString(PORT_REGISTRY_MAX_FORK)),
 
         // randomize ports...
-        editConfigurationFilePut("etc/org.sonatype.nexus.cfg", //
+        editConfigurationFilePut(NEXUS_PROPERTIES_FILE, //
             "application-port", Integer.toString(portRegistry.reservePort())),
-        editConfigurationFilePut("etc/org.sonatype.nexus.cfg", //
+        editConfigurationFilePut(NEXUS_PROPERTIES_FILE, //
             "application-port-ssl", Integer.toString(portRegistry.reservePort())),
-        editConfigurationFilePut("etc/org.apache.karaf.management.cfg", //
+        editConfigurationFilePut(KARAF_MANAGEMENT_FILE, //
             "rmiRegistryPort", Integer.toString(portRegistry.reservePort())),
-        editConfigurationFilePut("etc/org.apache.karaf.management.cfg", //
+        editConfigurationFilePut(KARAF_MANAGEMENT_FILE, //
             "rmiServerPort", Integer.toString(portRegistry.reservePort()))
     );
   }
@@ -389,7 +461,7 @@ public abstract class NexusPaxExamSupport
    * @return Pax-Exam option to change the context path for the Nexus distribution
    */
   public static Option withContextPath(final String contextPath) {
-    return editConfigurationFilePut("etc/org.sonatype.nexus.cfg", "nexus-context-path", contextPath);
+    return editConfigurationFilePut(NEXUS_PROPERTIES_FILE, "nexus-context-path", contextPath);
   }
 
   /**
@@ -397,7 +469,7 @@ public abstract class NexusPaxExamSupport
    */
   public static Option withHttps(final File keystore) {
     return composite(
-        editConfigurationFileExtend("etc/org.sonatype.nexus.cfg", "nexus-args", "${karaf.base}/etc/jetty-https.xml"),
+        editConfigurationFileExtend(NEXUS_PROPERTIES_FILE, "nexus-args", "${jetty.etc}/jetty-https.xml"),
         replaceConfigurationFile("etc/ssl/keystore.jks", keystore));
   }
 
@@ -412,7 +484,7 @@ public abstract class NexusPaxExamSupport
    * @return Pax-Exam option to install a Nexus plugin from the given feature XML and name
    */
   public static Option nexusFeature(final MavenUrlReference featureXml, final String name) {
-    return composite(features(featureXml), editConfigurationFileExtend("etc/org.sonatype.nexus.cfg", "nexus-features", name));
+    return composite(features(featureXml), editConfigurationFileExtend(NEXUS_PROPERTIES_FILE, "nexus-features", name));
   }
 
   /**
@@ -442,7 +514,7 @@ public abstract class NexusPaxExamSupport
 
     if (nexusFeatures.size() > 0) {
       // combine the nexus-features values into a single request
-      result.add(editConfigurationFileExtend("etc/org.sonatype.nexus.cfg", //
+      result.add(editConfigurationFileExtend(NEXUS_PROPERTIES_FILE, //
           "nexus-features", Joiner.on(',').join(nexusFeatures)));
     }
 
@@ -469,6 +541,7 @@ public abstract class NexusPaxExamSupport
     testIndex.recordAndCopyLink("karaf.log", resolveWorkFile("log/karaf.log"));
     testIndex.recordAndCopyLink("nexus.log", resolveWorkFile("log/nexus.log"));
     testIndex.recordAndCopyLink("request.log", resolveWorkFile("log/request.log"));
+    testIndex.recordAndCopyLink("jvm.log", resolveWorkFile("log/jvm.log"));
 
     final String surefirePrefix = "target/surefire-reports/" + getClass().getName();
     testIndex.recordLink("surefire result", resolveBaseFile(surefirePrefix + ".txt"));
@@ -477,6 +550,8 @@ public abstract class NexusPaxExamSupport
     final String failsafePrefix = "target/failsafe-reports/" + getClass().getName();
     testIndex.recordLink("failsafe result", resolveBaseFile(failsafePrefix + ".txt"));
     testIndex.recordLink("failsafe output", resolveBaseFile(failsafePrefix + "-output.txt"));
+
+    testCleaner.cleanOnSuccess(applicationDirectories.getInstallDirectory());
   }
 
   // -------------------------------------------------------------------------

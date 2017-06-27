@@ -20,7 +20,7 @@ import javax.inject.Named;
 import javax.inject.Singleton;
 
 import org.sonatype.goodies.common.ComponentSupport;
-import org.sonatype.nexus.common.event.EventBus;
+import org.sonatype.nexus.common.event.EventManager;
 
 import com.google.common.collect.ImmutableSet;
 
@@ -34,20 +34,20 @@ import static com.google.common.base.Preconditions.checkNotNull;
  * Type + name needs to be unique.
  *
  * This serves as a descriptor, but typically also will be an event-sink to listen for events and emit requests
- * to encodde and send webhook requests.
+ * to encode and send webhook requests.
  *
  * @since 3.1
  */
 public abstract class Webhook
     extends ComponentSupport
 {
-  private EventBus eventBus;
+  private EventManager eventManager;
 
   private final Set<SubscriptionImpl> subscriptions = new CopyOnWriteArraySet<>();
 
   @Inject
-  public void setEventBus(final EventBus eventBus) {
-    this.eventBus = checkNotNull(eventBus);
+  public void setEventManager(final EventManager eventManager) {
+    this.eventManager = checkNotNull(eventManager);
   }
 
   /**
@@ -61,10 +61,10 @@ public abstract class Webhook
   public abstract String getName();
 
   /**
-   * Helper to return type:name.
+   * Helper to return rm:type:name.
    */
   public String getId() {
-    return getType() + ":" + getName();
+    return "rm:" + getType() + ":" + getName();
   }
 
   /**
@@ -114,7 +114,7 @@ public abstract class Webhook
 
       // maybe start listening for events
       if (subscriptions.size() == 1) {
-        eventBus.register(this);
+        eventManager.register(this);
         log.debug("Listening for events");
       }
       return subscription;
@@ -136,7 +136,7 @@ public abstract class Webhook
 
       // maybe stop listening for events
       if (subscriptions.isEmpty()) {
-        eventBus.unregister(this);
+        eventManager.unregister(this);
         log.debug("Stopped listening for events");
       }
     }
@@ -145,17 +145,17 @@ public abstract class Webhook
   /**
    * Create {@link WebhookRequest} for given body and emit {@link WebhookRequestSendEvent}.
    */
-  protected void queue(final WebhookSubscription subscription, final Object body) {
+  protected void queue(final WebhookSubscription subscription, final WebhookPayload body) {
     log.debug("Queuing request for {} -> {}", subscription, body);
     WebhookRequest request = new WebhookRequest();
     request.setWebhook(this);
-    request.setBody(body);
+    request.setPayload(body);
     WebhookConfiguration configuration = subscription.getConfiguration();
     request.setUrl(configuration.getUrl());
     request.setSecret(configuration.getSecret());
 
     // using event here to avoid cyclic dependency between WebhookService and Webhook impls
-    eventBus.post(new WebhookRequestSendEvent(request));
+    eventManager.post(new WebhookRequestSendEvent(request));
   }
 
   @Override

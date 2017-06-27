@@ -22,8 +22,11 @@ import org.sonatype.nexus.email.EmailConfiguration
 import org.sonatype.nexus.email.EmailManager
 import org.sonatype.nexus.extdirect.DirectComponent
 import org.sonatype.nexus.extdirect.DirectComponentSupport
+import org.sonatype.nexus.rapture.PasswordPlaceholder
 import org.sonatype.nexus.validation.Validate
 
+import com.codahale.metrics.annotation.ExceptionMetered
+import com.codahale.metrics.annotation.Timed
 import com.softwarementors.extjs.djn.config.annotations.DirectAction
 import com.softwarementors.extjs.djn.config.annotations.DirectMethod
 import groovy.transform.PackageScope
@@ -49,6 +52,8 @@ class EmailComponent
    * Returns current configuration.
    */
   @DirectMethod
+  @Timed
+  @ExceptionMetered
   @RequiresPermissions('nexus:settings:read')
   EmailConfigurationXO read() {
     return convert(emailManager.configuration)
@@ -61,7 +66,7 @@ class EmailComponent
         host: value.host,
         port: value.port,
         username: value.username,
-        password: value.password,
+        password: value.password?.trim() ? PasswordPlaceholder.get() : null,
         fromAddress: value.fromAddress,
         subjectPrefix: value.subjectPrefix,
         startTlsEnabled: value.startTlsEnabled,
@@ -76,11 +81,17 @@ class EmailComponent
    * Update configuration, returns updated configuration.
    */
   @DirectMethod
+  @Timed
+  @ExceptionMetered
   @RequiresAuthentication
   @RequiresPermissions('nexus:settings:update')
   @Validate
   EmailConfigurationXO update(@NotNull @Valid final EmailConfigurationXO configuration)
   {
+    if(PasswordPlaceholder.is(configuration.password)) {
+      // the transfer object contains the mask, preserve existing password value
+      configuration.password = emailManager.configuration.password
+    }
     emailManager.configuration = convert(configuration)
     return read()
   }
@@ -107,6 +118,8 @@ class EmailComponent
    * Send verification email.
    */
   @DirectMethod
+  @Timed
+  @ExceptionMetered
   @RequiresAuthentication
   @RequiresPermissions('nexus:settings:update')
   @Validate

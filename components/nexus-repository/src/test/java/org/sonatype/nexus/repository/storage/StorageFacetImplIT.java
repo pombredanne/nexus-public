@@ -23,25 +23,26 @@ import org.sonatype.nexus.common.collect.NestedAttributesMap;
 import org.sonatype.nexus.common.entity.EntityHelper;
 import org.sonatype.nexus.common.entity.EntityId;
 import org.sonatype.nexus.common.entity.EntityVersion;
-import org.sonatype.nexus.common.event.EventBus;
-import org.sonatype.nexus.common.node.LocalNodeAccess;
+import org.sonatype.nexus.common.event.EventManager;
+import org.sonatype.nexus.common.node.NodeAccess;
 import org.sonatype.nexus.mime.MimeRulesSource;
 import org.sonatype.nexus.mime.internal.DefaultMimeSupport;
 import org.sonatype.nexus.orient.HexRecordIdObfuscator;
-import org.sonatype.nexus.orient.PersistentDatabaseInstanceRule;
 import org.sonatype.nexus.orient.entity.AttachedEntityId;
+import org.sonatype.nexus.orient.testsupport.DatabaseInstanceRule;
 import org.sonatype.nexus.repository.Format;
 import org.sonatype.nexus.repository.Repository;
 import org.sonatype.nexus.repository.config.Configuration;
 import org.sonatype.nexus.repository.config.ConfigurationFacet;
 import org.sonatype.nexus.repository.search.SearchFacet;
+import org.sonatype.nexus.repository.storage.internal.ComponentSchemaRegistration;
+import org.sonatype.nexus.repository.storage.internal.StorageFacetManager;
 import org.sonatype.nexus.security.ClientInfoProvider;
 
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Iterators;
 import com.google.common.collect.Lists;
-import com.google.inject.util.Providers;
 import com.orientechnologies.orient.core.exception.OConcurrentModificationException;
 import com.orientechnologies.orient.core.record.impl.ODocument;
 import com.orientechnologies.orient.core.sql.OCommandSQL;
@@ -53,6 +54,7 @@ import org.junit.Test;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.greaterThan;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.notNullValue;
 import static org.hamcrest.Matchers.nullValue;
@@ -74,7 +76,7 @@ public class StorageFacetImplIT
     extends TestSupport
 {
   @Rule
-  public PersistentDatabaseInstanceRule database = new PersistentDatabaseInstanceRule("test");
+  public DatabaseInstanceRule database = DatabaseInstanceRule.inFilesystem("test");
 
   protected StorageFacetImpl underTest;
 
@@ -83,6 +85,8 @@ public class StorageFacetImplIT
   protected Repository testRepository2 = mock(Repository.class);
 
   protected TestFormat testFormat = new TestFormat();
+
+  private ComponentSchemaRegistration schemaRegistration;
 
   private AssetEntityAdapter assetEntityAdapter;
 
@@ -96,31 +100,33 @@ public class StorageFacetImplIT
 
   @Before
   public void setUp() throws Exception {
-    LocalNodeAccess mockLocalNodeAccess = mock(LocalNodeAccess.class);
-    when(mockLocalNodeAccess.getId()).thenReturn("testNodeId");
+    NodeAccess mockNodeAccess = mock(NodeAccess.class);
+    when(mockNodeAccess.getId()).thenReturn("testNodeId");
     BlobStoreManager mockBlobStoreManager = mock(BlobStoreManager.class);
     when(mockBlobStoreManager.get(anyString())).thenReturn(mock(BlobStore.class));
     BucketEntityAdapter bucketEntityAdapter = new BucketEntityAdapter();
     HexRecordIdObfuscator recordIdObfuscator = new HexRecordIdObfuscator();
-    bucketEntityAdapter.installDependencies(recordIdObfuscator);
+    bucketEntityAdapter.enableObfuscation(recordIdObfuscator);
     ComponentEntityAdapter componentEntityAdapter = new ComponentEntityAdapter(bucketEntityAdapter);
-    componentEntityAdapter.installDependencies(recordIdObfuscator);
+    componentEntityAdapter.enableObfuscation(recordIdObfuscator);
     assetEntityAdapter = new AssetEntityAdapter(bucketEntityAdapter, componentEntityAdapter);
-    assetEntityAdapter.installDependencies(recordIdObfuscator);
+    assetEntityAdapter.enableObfuscation(recordIdObfuscator);
     ContentValidatorSelector contentValidatorSelector = new ContentValidatorSelector(Collections.<String, ContentValidator>emptyMap(), new DefaultContentValidator(new DefaultMimeSupport()));
     MimeRulesSourceSelector mimeRulesSourceSelector = new MimeRulesSourceSelector(Collections.<String, MimeRulesSource>emptyMap());
+    StorageFacetManager storageFacetManager = mock(StorageFacetManager.class);
     underTest = new StorageFacetImpl(
-        mockLocalNodeAccess,
+        mockNodeAccess,
         mockBlobStoreManager,
-        Providers.of(database.getInstance()),
+        database.getInstanceProvider(),
         bucketEntityAdapter,
         componentEntityAdapter,
         assetEntityAdapter,
         mock(ClientInfoProvider.class),
         contentValidatorSelector,
-        mimeRulesSourceSelector
+        mimeRulesSourceSelector,
+        storageFacetManager
     );
-    underTest.installDependencies(mock(EventBus.class));
+    underTest.installDependencies(mock(EventManager.class));
 
     StorageFacetImpl.Config config = new StorageFacetImpl.Config();
     ConfigurationFacet configurationFacet = mock(ConfigurationFacet.class);
@@ -140,6 +146,14 @@ public class StorageFacetImplIT
     when(testRepository2.facet(ConfigurationFacet.class)).thenReturn(configurationFacet);
     when(testRepository2.facet(SearchFacet.class)).thenReturn(mock(SearchFacet.class));
 
+    schemaRegistration = new ComponentSchemaRegistration(
+        database.getInstanceProvider(),
+        bucketEntityAdapter,
+        componentEntityAdapter,
+        assetEntityAdapter);
+
+    schemaRegistration.start();
+
     underTest.attach(testRepository1);
     underTest.init();
     underTest.start();
@@ -148,6 +162,8 @@ public class StorageFacetImplIT
   @After
   public void tearDown() throws Exception {
     underTest.stop();
+
+    schemaRegistration.stop();
   }
 
   @Test
@@ -388,10 +404,10 @@ public class StorageFacetImplIT
       checkSize(tx.browseComponents(bucket), 1);
 
       assertNotNull(tx.findAsset(asset1Id, bucket));
-      assertNotNull(tx.findComponent(componentId, bucket));
+      assertNotNull(tx.findComponentInBucket(componentId, bucket));
 
-      checkSize(tx.browseAssets(tx.findComponent(componentId, bucket)), 1);
-      assertNotNull(tx.firstAsset(tx.findComponent(componentId, bucket)));
+      checkSize(tx.browseAssets(tx.findComponentInBucket(componentId, bucket)), 1);
+      assertNotNull(tx.firstAsset(tx.findComponentInBucket(componentId, bucket)));
       assertNull(tx.findAsset(asset1Id, bucket).componentId());
       assertNotNull(tx.findAsset(asset2Id, bucket).componentId());
 
@@ -403,7 +419,7 @@ public class StorageFacetImplIT
 
       // Delete both and make sure browse and find behave as expected
       tx.deleteAsset(tx.findAsset(asset1Id, bucket));
-      tx.deleteComponent(tx.findComponent(componentId, bucket));
+      tx.deleteComponent(tx.findComponentInBucket(componentId, bucket));
 
       tx.commit();
       tx.begin();
@@ -411,7 +427,7 @@ public class StorageFacetImplIT
       checkSize(tx.browseAssets(bucket), 0);
       checkSize(tx.browseComponents(bucket), 0);
       assertNull(tx.findAsset(asset1Id, bucket));
-      assertNull(tx.findComponent(componentId, bucket));
+      assertNull(tx.findComponentInBucket(componentId, bucket));
 
       // NOTE: It doesn't matter for this test, but you should commit when finished with one or more writes
       //       If you don't, your changes will be automatically rolled back.
@@ -436,7 +452,7 @@ public class StorageFacetImplIT
       final Asset asset = tx.findAssetWithProperty("name", "asset", tx.findBucket(testRepository1));
       assertThat(asset, is(notNullValue()));
 
-      final Component component = tx.findComponent(asset.componentId(), tx.findBucket(testRepository1));
+      final Component component = tx.findComponentInBucket(asset.componentId(), tx.findBucket(testRepository1));
       assertThat(component, is(notNullValue()));
       assertThat(component.name(), is("component"));
 
@@ -532,7 +548,7 @@ public class StorageFacetImplIT
       EntityVersion finalVersion = EntityHelper.version(asset);
 
       assertThat(name, is("secondValue"));
-      assertThat(finalVersion.getValue(), is(String.valueOf(Integer.valueOf(firstVersion.getValue()) + 2)));
+      assertThat(Integer.valueOf(finalVersion.getValue()), greaterThan(Integer.valueOf(firstVersion.getValue())));
     }
   }
 
@@ -723,7 +739,7 @@ public class StorageFacetImplIT
     }
 
     try (StorageTx tx = beginTX()) {
-      final Component component = tx.findComponent(componentId, tx.findBucket(testRepository1));
+      final Component component = tx.findComponentInBucket(componentId, tx.findBucket(testRepository1));
       assertThat("component", component, is(notNullValue()));
       assertThat(component.name(), is("component"));
     }
@@ -748,7 +764,7 @@ public class StorageFacetImplIT
     }
 
     try (StorageTx tx = beginTX()) {
-      final Component component = tx.findComponent(componentId, tx.findBucket(testRepository1));
+      final Component component = tx.findComponentInBucket(componentId, tx.findBucket(testRepository1));
       assertThat("component", component, is(notNullValue()));
       assertThat(component.name(), is("component"));
 
@@ -770,8 +786,8 @@ public class StorageFacetImplIT
   }
 
   @Test
-  public void assetLastAccessed() throws Exception {
-    final String ASSET_NAME = "assetLastAccessed";
+  public void assetLastDownloaded() throws Exception {
+    final String ASSET_NAME = "assetLastDownloaded";
     try (StorageTx tx = beginTX()) {
       Bucket bucket = tx.findBucket(testRepository1);
       Asset asset = tx.createAsset(bucket, testFormat).name(ASSET_NAME);
@@ -783,8 +799,8 @@ public class StorageFacetImplIT
       Bucket bucket = tx.findBucket(testRepository1);
       Asset asset = tx.findAssetWithProperty(P_NAME, ASSET_NAME, bucket);
       assertThat(asset, notNullValue());
-      assertThat(asset.lastAccessed(), nullValue());
-      assertThat(asset.markAsAccessed(), is(true));
+      assertThat(asset.lastDownloaded(), nullValue());
+      assertThat(asset.markAsDownloaded(), is(true));
       tx.saveAsset(asset);
       tx.commit();
     }
@@ -793,8 +809,8 @@ public class StorageFacetImplIT
       Bucket bucket = tx.findBucket(testRepository1);
       Asset asset = tx.findAssetWithProperty(P_NAME, ASSET_NAME, bucket);
       assertThat(asset, notNullValue());
-      assertThat(asset.lastAccessed(), notNullValue());
-      assertThat(asset.markAsAccessed(), is(false));
+      assertThat(asset.lastDownloaded(), notNullValue());
+      assertThat(asset.markAsDownloaded(), is(false));
     }
   }
 

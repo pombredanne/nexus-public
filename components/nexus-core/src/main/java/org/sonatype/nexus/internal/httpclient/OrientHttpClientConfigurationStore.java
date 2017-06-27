@@ -18,16 +18,20 @@ import javax.inject.Named;
 import javax.inject.Provider;
 import javax.inject.Singleton;
 
-import org.sonatype.goodies.lifecycle.LifecycleSupport;
 import org.sonatype.nexus.common.app.ManagedLifecycle;
-import org.sonatype.nexus.httpclient.HttpClientConfigurationStore;
+import org.sonatype.nexus.common.stateguard.Guarded;
+import org.sonatype.nexus.common.stateguard.StateGuardLifecycleSupport;
 import org.sonatype.nexus.httpclient.config.HttpClientConfiguration;
 import org.sonatype.nexus.orient.DatabaseInstance;
+import org.sonatype.nexus.orient.DatabaseInstanceNames;
 
 import com.orientechnologies.orient.core.db.document.ODatabaseDocumentTx;
 
 import static com.google.common.base.Preconditions.checkNotNull;
-import static org.sonatype.nexus.common.app.ManagedLifecycle.Phase.STORAGE;
+import static org.sonatype.nexus.common.app.ManagedLifecycle.Phase.SCHEMAS;
+import static org.sonatype.nexus.common.stateguard.StateGuardLifecycleSupport.State.STARTED;
+import static org.sonatype.nexus.orient.transaction.OrientTransactional.inTx;
+import static org.sonatype.nexus.orient.transaction.OrientTransactional.inTxRetry;
 
 /**
  * Orient {@link HttpClientConfigurationStore}.
@@ -35,10 +39,10 @@ import static org.sonatype.nexus.common.app.ManagedLifecycle.Phase.STORAGE;
  * @since 3.0
  */
 @Named("orient")
-@ManagedLifecycle(phase = STORAGE)
+@ManagedLifecycle(phase = SCHEMAS)
 @Singleton
 public class OrientHttpClientConfigurationStore
-  extends LifecycleSupport
+  extends StateGuardLifecycleSupport
   implements HttpClientConfigurationStore
 {
   private final Provider<DatabaseInstance> databaseInstance;
@@ -46,7 +50,7 @@ public class OrientHttpClientConfigurationStore
   private final HttpClientConfigurationEntityAdapter entityAdapter;
 
   @Inject
-  public OrientHttpClientConfigurationStore(@Named("config") final Provider<DatabaseInstance> databaseInstance,
+  public OrientHttpClientConfigurationStore(@Named(DatabaseInstanceNames.CONFIG) final Provider<DatabaseInstance> databaseInstance,
                                             final HttpClientConfigurationEntityAdapter entityAdapter)
   {
     this.databaseInstance = checkNotNull(databaseInstance);
@@ -60,23 +64,16 @@ public class OrientHttpClientConfigurationStore
     }
   }
 
-  private ODatabaseDocumentTx openDb() {
-    ensureStarted();
-    return databaseInstance.get().acquire();
-  }
-
   @Override
   @Nullable
+  @Guarded(by = STARTED)
   public HttpClientConfiguration load() {
-    try (ODatabaseDocumentTx db = openDb()) {
-      return entityAdapter.singleton.get(db);
-    }
+    return inTx(databaseInstance).call(entityAdapter::get);
   }
 
   @Override
+  @Guarded(by = STARTED)
   public void save(final HttpClientConfiguration configuration) {
-    try (ODatabaseDocumentTx db = openDb()) {
-      entityAdapter.singleton.set(db, configuration);
-    }
+    inTxRetry(databaseInstance).run(db -> entityAdapter.set(db, configuration));
   }
 }

@@ -14,6 +14,7 @@ package org.sonatype.nexus.script.plugin.internal.provisioning
 
 import javax.annotation.Nonnull
 import javax.annotation.Nullable
+import javax.inject.Inject
 import javax.inject.Named
 import javax.inject.Singleton
 
@@ -27,7 +28,6 @@ import org.sonatype.nexus.repository.maven.VersionPolicy
 import org.sonatype.nexus.repository.storage.WritePolicy
 import org.sonatype.nexus.script.plugin.RepositoryApi
 
-import com.google.inject.Inject
 import groovy.transform.CompileDynamic
 import groovy.transform.CompileStatic
 
@@ -100,9 +100,10 @@ class RepositoryApiImpl
                     autoBlock: true
                 ] as Map
             ] as Map,
-            proxy        : [
-                remoteUrl    : remoteUrl,
-                contentMaxAge: 1440
+            proxy: [
+                remoteUrl     : remoteUrl,
+                contentMaxAge : 1440,
+                metadataMaxAge: 1440
             ] as Map,
             negativeCache: [
                 enabled   : true,
@@ -134,7 +135,7 @@ class RepositoryApiImpl
         online: true,
         attributes: [
             group  : [
-                memberNames: members
+                memberNames: new LinkedHashSet(members.toList())
             ] as Map,
             storage: [
                 blobStoreName: blobStoreName
@@ -360,12 +361,12 @@ class RepositoryApiImpl
   }
 
   @Nonnull
-  Repository createRubygemsHosted(final String name, 
-                                  final String blobStoreName  = BlobStoreManager.DEFAULT_BLOBSTORE_NAME,
+  Repository createRubygemsHosted(final String name,
+                                  final String blobStoreName = BlobStoreManager.DEFAULT_BLOBSTORE_NAME,
                                   final boolean strictContentTypeValidation = true,
                                   final WritePolicy writePolicy = WritePolicy.ALLOW)
   {
-    return createRepository(createHosted(name, 'rubygems-hosted', blobStoreName, writePolicy, strictContentTypeValidation))
+    createRepository(createHosted(name, 'rubygems-hosted', blobStoreName, writePolicy, strictContentTypeValidation))
   }
 
   @Nonnull
@@ -374,7 +375,33 @@ class RepositoryApiImpl
                                  final String blobStoreName = BlobStoreManager.DEFAULT_BLOBSTORE_NAME,
                                  final boolean strictContentTypeValidation = true)
   {
-    return createRepository(createProxy(name, 'rubygems-proxy', remoteUrl, blobStoreName, strictContentTypeValidation))
+    createRepository(createProxy(name, 'rubygems-proxy', remoteUrl, blobStoreName, strictContentTypeValidation))
+  }
+
+  @Nonnull
+  Repository createRubygemsGroup(final String name,
+                                 final List<String> members,
+                                 final String blobStoreName = BlobStoreManager.DEFAULT_BLOBSTORE_NAME)
+  {
+    createRepository(createGroup(name, 'rubygems-group', blobStoreName, members as String[]))
+  }
+
+  @Nonnull
+  Repository createYumProxy(final String name,
+                            final String remoteUrl,
+                            final String blobStoreName = BlobStoreManager.DEFAULT_BLOBSTORE_NAME,
+                            final boolean strictContentTypeValidation = true)
+  {
+    createRepository(createProxy(name, 'yum-proxy', remoteUrl, blobStoreName, strictContentTypeValidation))
+  }
+
+  @Nonnull
+  Repository createGitLfsHosted(final String name,
+                                final String blobStoreName = BlobStoreManager.DEFAULT_BLOBSTORE_NAME,
+                                final boolean strictContentTypeValidation = true,
+                                final WritePolicy writePolicy = WritePolicy.ALLOW)
+  {
+    createRepository(createHosted(name, 'gitlfs-hosted', blobStoreName, writePolicy, strictContentTypeValidation))
   }
 
   private static Map configureMaven(final VersionPolicy versionPolicy = VersionPolicy.MIXED,
@@ -404,7 +431,7 @@ class RepositoryApiImpl
 
   @CompileDynamic
   void validateGroupMembers(final Configuration configuration) {
-    def members = configuration.attributes.group?.memberNames
+    Collection members = configuration.attributes.group?.memberNames
     if (members) {
       def existingRepos = repositoryManager.browse().collect { Repository repository -> repository.name }
       boolean valid = members.every { String memberName ->

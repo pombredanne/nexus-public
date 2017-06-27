@@ -15,7 +15,7 @@ package org.sonatype.nexus.quartz;
 import java.util.Date;
 
 import org.sonatype.goodies.testsupport.TestSupport;
-import org.sonatype.nexus.orient.DatabaseInstanceRule;
+import org.sonatype.nexus.orient.testsupport.DatabaseInstanceRule;
 import org.sonatype.nexus.scheduling.TaskConfiguration;
 import org.sonatype.nexus.scheduling.TaskInfo;
 import org.sonatype.nexus.scheduling.TaskScheduler;
@@ -25,6 +25,10 @@ import org.sonatype.nexus.scheduling.schedule.Schedule;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
+
+import static com.jayway.awaitility.Awaitility.await;
+import static java.util.concurrent.TimeUnit.MILLISECONDS;
+import static org.hamcrest.Matchers.is;
 
 /**
  * This beast brings up real SISU container and complete Quartz environment.
@@ -38,7 +42,7 @@ public abstract class QuartzTestSupport
   public static final String RESULT = "This is the expected result";
 
   @Rule
-  public DatabaseInstanceRule database = new DatabaseInstanceRule("test");
+  public DatabaseInstanceRule database = DatabaseInstanceRule.inMemory("test");
 
   private TaskSchedulerHelper taskSchedulerHelper;
 
@@ -83,5 +87,15 @@ public abstract class QuartzTestSupport
     taskConfiguration.setString(SleeperTask.RESULT_KEY, RESULT);
     return taskScheduler()
         .scheduleTask(taskConfiguration, schedule);
+  }
+
+  public void assertRunningTaskCount(int expectedCount) {
+    // pool maintenance might not be done when a task's future returns so polling is in order to be safe
+    await().atMost(RUN_TIMEOUT, MILLISECONDS).until(() -> taskScheduler().getRunningTaskCount(), is(expectedCount));
+  }
+
+  public void assertTaskState(final TaskInfo taskInfo, final TaskInfo.State expectedState) {
+    // unfortunately, a task's Future.get() returns before the task state is updated so polling is in order to be safe
+    await().atMost(RUN_TIMEOUT, MILLISECONDS).until(() -> taskInfo.getCurrentState().getState(), is(expectedState));
   }
 }

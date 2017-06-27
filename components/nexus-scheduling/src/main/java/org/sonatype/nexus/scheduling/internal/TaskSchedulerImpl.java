@@ -22,11 +22,15 @@ import javax.inject.Provider;
 import javax.inject.Singleton;
 
 import org.sonatype.goodies.common.ComponentSupport;
+import org.sonatype.nexus.common.event.EventManager;
+import org.sonatype.nexus.scheduling.ClusteredTaskState;
+import org.sonatype.nexus.scheduling.ClusteredTaskStateStore;
 import org.sonatype.nexus.scheduling.TaskConfiguration;
 import org.sonatype.nexus.scheduling.TaskDescriptor;
 import org.sonatype.nexus.scheduling.TaskFactory;
 import org.sonatype.nexus.scheduling.TaskInfo;
 import org.sonatype.nexus.scheduling.TaskScheduler;
+import org.sonatype.nexus.scheduling.events.TaskScheduledEvent;
 import org.sonatype.nexus.scheduling.schedule.Schedule;
 import org.sonatype.nexus.scheduling.schedule.ScheduleFactory;
 import org.sonatype.nexus.scheduling.spi.SchedulerSPI;
@@ -46,15 +50,23 @@ public class TaskSchedulerImpl
     extends ComponentSupport
     implements TaskScheduler
 {
+  private final EventManager eventManager;
+
   private final TaskFactory taskFactory;
+
+  private final ClusteredTaskStateStore clusteredTaskStateStore;
 
   private final Provider<SchedulerSPI> scheduler;
 
   @Inject
-  public TaskSchedulerImpl(final TaskFactory taskFactory,
+  public TaskSchedulerImpl(final EventManager eventManager,
+                           final TaskFactory taskFactory,
+                           final ClusteredTaskStateStore clusteredTaskStateStore,
                            final Provider<SchedulerSPI> scheduler)
   {
+    this.eventManager = checkNotNull(eventManager);
     this.taskFactory = checkNotNull(taskFactory);
+    this.clusteredTaskStateStore = checkNotNull(clusteredTaskStateStore);
     this.scheduler = checkNotNull(scheduler);
   }
 
@@ -92,6 +104,7 @@ public class TaskSchedulerImpl
     checkArgument(descriptor != null, "Missing descriptor for task with type-id: %s", typeId);
 
     TaskConfiguration config = new TaskConfiguration();
+    descriptor.initializeConfiguration(config); // in case any hardcode values need to be inserted
     config.setId(UUID.randomUUID().toString());
     config.setTypeId(descriptor.getId());
     config.setTypeName(descriptor.getName());
@@ -131,11 +144,20 @@ public class TaskSchedulerImpl
     config.setUpdated(now);
 
     TaskInfo taskInfo = getScheduler().scheduleTask(config, schedule);
+
     log.info("Task {} scheduled: {}",
         taskInfo.getConfiguration().getTaskLogName(),
         taskInfo.getSchedule().getType()
     );
 
+    eventManager.post(new TaskScheduledEvent(taskInfo));
+
     return taskInfo;
+  }
+
+  @Override
+  public List<ClusteredTaskState> getClusteredTaskStateById(String taskId) {
+    checkNotNull(taskId);
+    return clusteredTaskStateStore.getClusteredState(taskId);
   }
 }

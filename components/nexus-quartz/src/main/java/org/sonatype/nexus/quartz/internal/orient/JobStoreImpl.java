@@ -32,15 +32,22 @@ import javax.inject.Named;
 import javax.inject.Provider;
 import javax.inject.Singleton;
 
-import org.sonatype.goodies.common.ComponentSupport;
 import org.sonatype.goodies.common.Time;
+import org.sonatype.goodies.lifecycle.LifecycleSupport;
+import org.sonatype.nexus.common.app.ManagedLifecycle;
+import org.sonatype.nexus.common.node.NodeAccess;
+import org.sonatype.nexus.common.text.Strings2;
 import org.sonatype.nexus.orient.DatabaseInstance;
+import org.sonatype.nexus.orient.DatabaseInstanceNames;
 
 import com.google.common.base.Throwables;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.Iterables;
 import com.orientechnologies.common.concur.ONeedRetryException;
 import com.orientechnologies.orient.core.db.document.ODatabaseDocumentTx;
+import com.orientechnologies.orient.core.exception.ORecordNotFoundException;
 import org.quartz.Calendar;
+import org.quartz.JobDataMap;
 import org.quartz.JobDetail;
 import org.quartz.JobKey;
 import org.quartz.JobPersistenceException;
@@ -61,8 +68,8 @@ import org.quartz.spi.TriggerFiredResult;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
-import static org.sonatype.nexus.orient.OrientTransaction.currentDb;
-import static org.sonatype.nexus.orient.OrientTransaction.txSupplier;
+import static org.sonatype.nexus.common.app.ManagedLifecycle.Phase.SCHEMAS;
+import static org.sonatype.nexus.orient.transaction.OrientTransactional.inTx;
 import static org.sonatype.nexus.quartz.internal.orient.TriggerEntity.State.ACQUIRED;
 import static org.sonatype.nexus.quartz.internal.orient.TriggerEntity.State.BLOCKED;
 import static org.sonatype.nexus.quartz.internal.orient.TriggerEntity.State.COMPLETE;
@@ -70,7 +77,8 @@ import static org.sonatype.nexus.quartz.internal.orient.TriggerEntity.State.ERRO
 import static org.sonatype.nexus.quartz.internal.orient.TriggerEntity.State.PAUSED;
 import static org.sonatype.nexus.quartz.internal.orient.TriggerEntity.State.PAUSED_BLOCKED;
 import static org.sonatype.nexus.quartz.internal.orient.TriggerEntity.State.WAITING;
-import static org.sonatype.nexus.transaction.Operations.transactional;
+import static org.sonatype.nexus.scheduling.TaskDescriptorSupport.LIMIT_NODE_KEY;
+import static org.sonatype.nexus.scheduling.TaskDescriptorSupport.MULTINODE_KEY;
 
 /**
  * Orient {@link JobStore}.
@@ -78,11 +86,14 @@ import static org.sonatype.nexus.transaction.Operations.transactional;
  * @since 3.0
  */
 @Named("orient")
+@ManagedLifecycle(phase = SCHEMAS)
 @Singleton
 public class JobStoreImpl
-    extends ComponentSupport
+    extends LifecycleSupport
     implements JobStore
 {
+  private static final String NODE_ID = "node.identity";
+
   private final Provider<DatabaseInstance> databaseInstance;
 
   private final JobDetailEntityAdapter jobDetailEntityAdapter;
@@ -91,40 +102,36 @@ public class JobStoreImpl
 
   private final CalendarEntityAdapter calendarEntityAdapter;
 
-  private SchedulerSignaler signaler;
+  private final NodeAccess nodeAccess;
 
-  // TODO: Sort out instanceName and instanceId usage in persistence model (related to clustering?)
+  private SchedulerSignaler signaler;
 
   private String instanceName;
 
   private String instanceId;
 
   @Inject
-  public JobStoreImpl(@Named("config") final Provider<DatabaseInstance> databaseInstance,
+  public JobStoreImpl(@Named(DatabaseInstanceNames.CONFIG) final Provider<DatabaseInstance> databaseInstance,
                       final JobDetailEntityAdapter jobDetailEntityAdapter,
                       final TriggerEntityAdapter triggerEntityAdapter,
-                      final CalendarEntityAdapter calendarEntityAdapter)
+                      final CalendarEntityAdapter calendarEntityAdapter,
+                      final NodeAccess nodeAccess)
   {
     this.databaseInstance = checkNotNull(databaseInstance);
     this.jobDetailEntityAdapter = checkNotNull(jobDetailEntityAdapter);
     this.triggerEntityAdapter = checkNotNull(triggerEntityAdapter);
     this.calendarEntityAdapter = checkNotNull(calendarEntityAdapter);
+    this.nodeAccess = checkNotNull(nodeAccess);
   }
 
-  /**
-   * Always returns {@code true}.
-   */
   @Override
   public boolean supportsPersistence() {
     return true;
   }
 
-  /**
-   * Always returns {@code false}.
-   */
   @Override
   public boolean isClustered() {
-    return false;
+    return nodeAccess.isClustered();
   }
 
   @Override
@@ -170,10 +177,10 @@ public class JobStoreImpl
   private <T> T execute(final Operation<T> operation) throws JobPersistenceException {
     try {
       synchronized (monitor) {
-        return transactional(txSupplier(databaseInstance.get()))
-            .retryOn(ONeedRetryException.class)
+        return inTx(databaseInstance)
+            .retryOn(ONeedRetryException.class, ORecordNotFoundException.class)
             .throwing(JobPersistenceException.class)
-            .call(() -> operation.execute(currentDb()));
+            .call(operation::execute);
       }
     }
     catch (Exception e) {
@@ -193,14 +200,23 @@ public class JobStoreImpl
     try {
       return execute(operation);
     }
-    catch (Exception e) {
-      throw Throwables.propagate(e);
+    catch (JobPersistenceException e) {
+      throw new RuntimeException(e);
     }
   }
 
   //
   // Lifecycle
   //
+
+  @Override
+  protected void doStart() throws Exception {
+    try (ODatabaseDocumentTx db = databaseInstance.get().connect()) {
+      jobDetailEntityAdapter.register(db);
+      triggerEntityAdapter.register(db);
+      calendarEntityAdapter.register(db);
+    }
+  }
 
   @Override
   public void initialize(final ClassLoadHelper loadHelper, final SchedulerSignaler signaler)
@@ -210,12 +226,6 @@ public class JobStoreImpl
 
     // TODO: Should we consider using ClassLoadHelper?
     this.signaler = checkNotNull(signaler);
-
-    try (ODatabaseDocumentTx db = databaseInstance.get().connect()) {
-      jobDetailEntityAdapter.register(db);
-      triggerEntityAdapter.register(db);
-      calendarEntityAdapter.register(db);
-    }
 
     log.info("Initialized");
   }
@@ -227,7 +237,9 @@ public class JobStoreImpl
   public void schedulerStarted() throws SchedulerException {
     execute(
         db -> {
-          for (TriggerEntity triggerEntity : triggerEntityAdapter.browse.execute(db)) {
+          // check state of local triggers
+          for (TriggerEntity triggerEntity : local(triggerEntityAdapter.browse(db))) {
+
             // reset states
             switch (triggerEntity.getState()) {
               case ACQUIRED:
@@ -292,9 +304,9 @@ public class JobStoreImpl
   @Override
   public void clearAllSchedulingData() throws JobPersistenceException {
     execute(db -> {
-      jobDetailEntityAdapter.deleteAll.execute(db);
-      triggerEntityAdapter.deleteAll.execute(db);
-      calendarEntityAdapter.deleteAll.execute(db);
+      jobDetailEntityAdapter.deleteAll(db);
+      triggerEntityAdapter.deleteAll(db);
+      calendarEntityAdapter.deleteAll(db);
       return null;
     });
   }
@@ -316,7 +328,7 @@ public class JobStoreImpl
   {
     log.debug("Store job: jobDetail={}, replaceExisting={}", jobDetail, replaceExisting);
 
-    JobDetailEntity entity = jobDetailEntityAdapter.readyByKey.execute(db, jobDetail.getKey());
+    JobDetailEntity entity = jobDetailEntityAdapter.readByKey(db, jobDetail.getKey());
     if (entity == null) {
       // no existing entity, add new one
       entity = new JobDetailEntity(jobDetail);
@@ -341,7 +353,7 @@ public class JobStoreImpl
   }
 
   private boolean removeJob(final ODatabaseDocumentTx db, final JobKey jobKey) throws JobPersistenceException {
-    boolean deleted = jobDetailEntityAdapter.deleteByKey.execute(db, jobKey);
+    boolean deleted = jobDetailEntityAdapter.deleteByKey(db, jobKey);
     triggerEntityAdapter.deleteByJobKey(db, jobKey);
     return deleted;
   }
@@ -362,26 +374,26 @@ public class JobStoreImpl
   @Nullable
   public JobDetail retrieveJob(final JobKey jobKey) throws JobPersistenceException {
     return execute(db -> {
-      JobDetailEntity entity = jobDetailEntityAdapter.readyByKey.execute(db, jobKey);
+      JobDetailEntity entity = jobDetailEntityAdapter.readByKey(db, jobKey);
       return entity != null ? entity.getValue() : null;
     });
   }
 
   @Override
   public boolean checkExists(final JobKey jobKey) throws JobPersistenceException {
-    return execute(db -> jobDetailEntityAdapter.existsByKey.execute(db, jobKey));
+    return execute(db -> jobDetailEntityAdapter.existsByKey(db, jobKey));
   }
 
   @Override
   public int getNumberOfJobs() throws JobPersistenceException {
-    return execute(db -> jobDetailEntityAdapter.count.executeI(db));
+    return execute(db -> jobDetailEntityAdapter.countI(db));
   }
 
   @Override
   public List<String> getJobGroupNames() throws JobPersistenceException {
     return execute(db -> {
       ArrayList<String> result = new ArrayList<>();
-      for (JobDetailEntity entity : jobDetailEntityAdapter.browse.execute(db)) {
+      for (JobDetailEntity entity : jobDetailEntityAdapter.browse(db)) {
         result.add(entity.getGroup());
       }
       return result.stream().distinct().collect(Collectors.toList());
@@ -397,7 +409,7 @@ public class JobStoreImpl
       throws JobPersistenceException
   {
     Iterable<JobDetailEntity> matches = jobDetailEntityAdapter.browseWithPredicate
-        .execute(db, input -> matcher.isMatch(input.getValue().getKey()));
+        (db, input -> matcher.isMatch(input.getValue().getKey()));
 
     Set<JobKey> result = new HashSet<>();
     for (JobDetailEntity entity : matches) {
@@ -527,7 +539,12 @@ public class JobStoreImpl
   {
     log.debug("Store trigger: trigger={}, replaceExisting={}", trigger, replaceExisting);
 
-    TriggerEntity entity = triggerEntityAdapter.readyByKey.execute(db, trigger.getKey());
+    if (isClustered()) {
+      // associate trigger with the node that created it
+      trigger.getJobDataMap().put(NODE_ID, nodeAccess.getId());
+    }
+
+    TriggerEntity entity = triggerEntityAdapter.readByKey(db, trigger.getKey());
     if (entity == null) {
       // no existing entity, add new one
       entity = new TriggerEntity(trigger, WAITING);
@@ -554,7 +571,7 @@ public class JobStoreImpl
   private boolean removeTrigger(final ODatabaseDocumentTx db, final TriggerKey triggerKey)
       throws JobPersistenceException
   {
-    TriggerEntity entity = triggerEntityAdapter.readyByKey.execute(db, triggerKey);
+    TriggerEntity entity = triggerEntityAdapter.readByKey(db, triggerKey);
     
     if (entity == null) {
       log.debug("No matching Trigger to remove for key: {}", triggerKey);
@@ -564,7 +581,7 @@ public class JobStoreImpl
     // resolve job-key before deleting for orphan cleanup
     JobKey jobKey = entity.getValue().getJobKey();
 
-    boolean deleted = triggerEntityAdapter.deleteByKey.execute(db, triggerKey);
+    boolean deleted = triggerEntityAdapter.deleteByKey(db, triggerKey);
     log.debug("Trigger deleted: {} for key: {}", deleted, triggerKey);
 
     // delete related job if there are no triggers for it
@@ -574,11 +591,11 @@ public class JobStoreImpl
       // if there are no other triggers for the job then delete it
       if (!jobTriggers.iterator().hasNext()) {
         // lookup the job-detail so we can check if its durable or not
-        JobDetailEntity jobDetailEntity = jobDetailEntityAdapter.readyByKey.execute(db, jobKey);
+        JobDetailEntity jobDetailEntity = jobDetailEntityAdapter.readByKey(db, jobKey);
 
         if (jobDetailEntity != null && !jobDetailEntity.getValue().isDurable()) {
           // job is not durable, delete it
-          boolean jobDeleted = jobDetailEntityAdapter.deleteByKey.execute(db, jobKey);
+          boolean jobDeleted = jobDetailEntityAdapter.deleteByKey(db, jobKey);
           log.debug("Job deleted: {} for jobKey: {}", deleted, jobKey);
 
           if (jobDeleted) {
@@ -610,8 +627,13 @@ public class JobStoreImpl
   {
     log.debug("Replace trigger: triggerKey={}, trigger={}", triggerKey, trigger);
 
+    if (isClustered()) {
+      // associate trigger with the node that replaced it
+      trigger.getJobDataMap().put(NODE_ID, nodeAccess.getId());
+    }
+
     return execute(db -> {
-      TriggerEntity entity = triggerEntityAdapter.readyByKey.execute(db, triggerKey);
+      TriggerEntity entity = triggerEntityAdapter.readByKey(db, triggerKey);
       if (entity != null) {
         // if entity exists, ensure trigger is associate with the same job
         if (!entity.getValue().getJobKey().equals(trigger.getJobKey())) {
@@ -634,19 +656,19 @@ public class JobStoreImpl
   @Nullable
   public OperableTrigger retrieveTrigger(final TriggerKey triggerKey) throws JobPersistenceException {
     return execute(db -> {
-      TriggerEntity entity = triggerEntityAdapter.readyByKey.execute(db, triggerKey);
+      TriggerEntity entity = triggerEntityAdapter.readByKey(db, triggerKey);
       return entity != null ? entity.getValue() : null;
     });
   }
 
   @Override
   public boolean checkExists(final TriggerKey triggerKey) throws JobPersistenceException {
-    return execute(db -> triggerEntityAdapter.existsByKey.execute(db, triggerKey));
+    return execute(db -> triggerEntityAdapter.existsByKey(db, triggerKey));
   }
 
   @Override
   public int getNumberOfTriggers() throws JobPersistenceException {
-    return execute(db -> triggerEntityAdapter.count.executeI(db));
+    return execute(db -> triggerEntityAdapter.countI(db));
   }
 
   @Override
@@ -662,7 +684,7 @@ public class JobStoreImpl
       throws JobPersistenceException
   {
     Iterable<TriggerEntity> matches = triggerEntityAdapter.browseWithPredicate
-        .execute(db, input -> matcher.isMatch(input.getValue().getKey()));
+        (db, input -> matcher.isMatch(input.getValue().getKey()));
 
     Set<TriggerKey> result = new HashSet<>();
     for (TriggerEntity entity : matches) {
@@ -703,7 +725,7 @@ public class JobStoreImpl
   @Override
   public TriggerState getTriggerState(final TriggerKey triggerKey) throws JobPersistenceException {
     return execute(db -> {
-      TriggerEntity entity = triggerEntityAdapter.readyByKey.execute(db, triggerKey);
+      TriggerEntity entity = triggerEntityAdapter.readByKey(db, triggerKey);
       if (entity == null) {
         return TriggerState.NONE;
       }
@@ -740,7 +762,7 @@ public class JobStoreImpl
   private void pauseTrigger(final ODatabaseDocumentTx db, final TriggerKey triggerKey) throws JobPersistenceException {
     log.debug("Pause trigger: {}", triggerKey);
 
-    TriggerEntity entity = triggerEntityAdapter.readyByKey.execute(db, triggerKey);
+    TriggerEntity entity = triggerEntityAdapter.readByKey(db, triggerKey);
     if (entity == null) {
       return;
     }
@@ -807,7 +829,7 @@ public class JobStoreImpl
   private void resumeTrigger(final ODatabaseDocumentTx db, final TriggerKey triggerKey) throws JobPersistenceException {
     log.debug("Resume trigger: {}", triggerKey);
 
-    TriggerEntity entity = triggerEntityAdapter.readyByKey.execute(db, triggerKey);
+    TriggerEntity entity = triggerEntityAdapter.readByKey(db, triggerKey);
     if (entity == null) {
       return;
     }
@@ -858,7 +880,7 @@ public class JobStoreImpl
           Set<String> pausedGroups = new HashSet<>();
           Set<String> groups = getTriggerGroups(db, GroupMatcher.anyGroup());
           for (String group : groups) {
-            boolean allPaused = !ImmutableList.copyOf(triggerEntityAdapter.browseByGroup.execute(db, group))
+            boolean allPaused = !ImmutableList.copyOf(triggerEntityAdapter.browseByGroup(db, group))
                 .stream().anyMatch(e -> PAUSED != e.getState() && PAUSED_BLOCKED != e.getState());
             if (allPaused) {
               pausedGroups.add(group);
@@ -878,8 +900,8 @@ public class JobStoreImpl
     log.debug("Acquire next triggers: noLaterThan={}, maxCount={}, timeWindow={}", noLaterThan, maxCount, timeWindow);
 
     return execute(db -> {
-      // find all triggers in WAITING state
-      Iterator<TriggerEntity> matches = triggerEntityAdapter.browseByState.execute(db, WAITING).iterator();
+      // find all local triggers in WAITING state
+      Iterator<TriggerEntity> matches = local(triggerEntityAdapter.browseByState(db, WAITING)).iterator();
 
       // short-circuit if no matches
       if (!matches.hasNext()) {
@@ -898,8 +920,8 @@ public class JobStoreImpl
           continue;
         }
 
-        // skip triggers which match misfire fudge logic
-        if (applyMisfire(db, entity)) {
+        // skip triggers which match misfire fudge logic (if the trigger will no longer fire)
+        if (applyMisfire(db, entity) && trigger.getNextFireTime() == null) {
           continue;
         }
 
@@ -911,6 +933,11 @@ public class JobStoreImpl
         // skip triggers which fire outside of requested window
         if (trigger.getMisfireInstruction() != Trigger.MISFIRE_INSTRUCTION_IGNORE_MISFIRE_POLICY &&
             trigger.getNextFireTime().getTime() < noEarlierThan) {
+          continue;
+        }
+
+        // check after misfire logic to avoid repeated log-spam
+        if (isClustered() && isLimitedToMissingNode(trigger)) {
           continue;
         }
 
@@ -929,7 +956,7 @@ public class JobStoreImpl
         TriggerEntity triggerEntity = triggerEntityIterator.next();
         OperableTrigger trigger = triggerEntity.getValue();
         JobKey jobKey = trigger.getJobKey();
-        JobDetailEntity jobDetailEntity = jobDetailEntityAdapter.readyByKey.execute(db, jobKey);
+        JobDetailEntity jobDetailEntity = jobDetailEntityAdapter.readByKey(db, jobKey);
         if (jobDetailEntity != null && jobDetailEntity.getValue().isConcurrentExectionDisallowed()) {
           if (jobsAcquired.contains(jobKey)) {
             // trigger for job disallowing concurrent execution already acquired
@@ -953,6 +980,10 @@ public class JobStoreImpl
         // TODO: Sort out if this is needed, maybe set to entity-id.value?
         // TODO: JDBC store impl uses this to do some validation on triggersFired()
         trigger.setFireInstanceId(UUID.randomUUID().toString());
+        if (isClustered()) {
+          // associate trigger with the node that acquired it
+          trigger.getJobDataMap().put(NODE_ID, nodeAccess.getId());
+        }
         result.add(trigger);
         entity.setState(ACQUIRED);
         triggerEntityAdapter.editEntity(db, entity);
@@ -986,7 +1017,7 @@ public class JobStoreImpl
     log.debug("Release acquired trigger: {}", trigger);
 
     executeAndPropagate(db -> {
-      TriggerEntity entity = triggerEntityAdapter.readyByKey.execute(db, trigger.getKey());
+      TriggerEntity entity = triggerEntityAdapter.readByKey(db, trigger.getKey());
 
       // update state to WAITING if the current state is ACQUIRED
       if (entity != null && entity.getState() == ACQUIRED) {
@@ -1034,7 +1065,7 @@ public class JobStoreImpl
 
     // resolve the entity for fired trigger
     final TriggerKey triggerKey = firedTrigger.getKey();
-    TriggerEntity entity = triggerEntityAdapter.readyByKey.execute(db, triggerKey);
+    TriggerEntity entity = triggerEntityAdapter.readByKey(db, triggerKey);
 
     // skip if trigger was deleted
     if (entity == null) {
@@ -1074,14 +1105,16 @@ public class JobStoreImpl
     trigger = entity.getValue();
 
     // resolve the job-detail for this trigger
-    JobDetailEntity jobDetailEntity = jobDetailEntityAdapter.readyByKey.execute(db, trigger.getJobKey());
+    JobDetailEntity jobDetailEntity = jobDetailEntityAdapter.readByKey(db, trigger.getJobKey());
     checkState(jobDetailEntity != null, "Missing job-detail for trigger-key: %s", triggerKey);
     JobDetail jobDetail = jobDetailEntity.getValue();
 
     // block other triggers for job if concurrent execution is disallowed
     if (jobDetail.isConcurrentExectionDisallowed()) {
-      blockOtherTriggers(db, triggerKey, jobDetail.getKey());
+      blockOtherTriggers(db, triggerKey, jobDetail);
     }
+
+    jobDetail.getJobDataMap().clearDirtyFlag(); // clear before handing to quartz
 
     return new TriggerFiredBundle(
         jobDetail,
@@ -1103,12 +1136,14 @@ public class JobStoreImpl
    */
   private void blockOtherTriggers(final ODatabaseDocumentTx db,
                                   final TriggerKey firedTriggerKey,
-                                  final JobKey jobKey)
+                                  final JobDetail jobDetail)
   {
+    JobKey jobKey = jobDetail.getKey();
+
     log.trace("Blocking other triggers: firedTriggerKey={}, jobKey={}", firedTriggerKey, jobKey);
 
     Iterable<TriggerEntity> matches = triggerEntityAdapter.browseWithPredicate
-        .execute(db, input -> {
+        (db, input -> {
           switch (input.getState()) {
             case WAITING:
             case PAUSED:
@@ -1116,6 +1151,10 @@ public class JobStoreImpl
           }
           return false;
         });
+
+    if (isMultiNodeTask(jobDetail)) {
+      matches = local(matches); // multinode task; each node only needs to block local triggers
+    }
 
     for (TriggerEntity entity : matches) {
       // skip the trigger which was fired
@@ -1141,22 +1180,24 @@ public class JobStoreImpl
     log.debug("Triggered job complete: trigger={}, jobDetail={}, instruction={}", trigger, jobDetail, instruction);
 
     executeAndPropagate(db -> {
-      TriggerEntity triggerEntity = triggerEntityAdapter.readyByKey.execute(db, trigger.getKey());
-      JobDetailEntity jobDetailEntity = jobDetailEntityAdapter.readyByKey.execute(db, jobDetail.getKey());
 
-      if (jobDetailEntity != null) {
-        // save job-data-map if needed
-        if (jobDetail.isPersistJobDataAfterExecution() && jobDetail.getJobDataMap() != null) {
+      // back from quartz; save job-data-map if needed
+      if (jobDetail.getJobDataMap().isDirty() && jobDetail.isPersistJobDataAfterExecution()) {
+        JobDetailEntity jobDetailEntity = jobDetailEntityAdapter.readByKey(db, jobDetail.getKey());
+
+        if (jobDetailEntity != null) {
           jobDetailEntity.setValue(jobDetail);
           jobDetailEntityAdapter.editEntity(db, jobDetailEntity);
         }
-
-        // unblock triggers if concurrent execution is disallowed
-        if (jobDetail.isConcurrentExectionDisallowed()) {
-          unblockTriggers(db, jobDetail.getKey());
-          signaler.signalSchedulingChange(0L);
-        }
       }
+
+      // unblock triggers if concurrent execution is disallowed
+      if (jobDetail.isConcurrentExectionDisallowed()) {
+        unblockTriggers(db, jobDetail);
+        signaler.signalSchedulingChange(0L);
+      }
+
+      TriggerEntity triggerEntity = triggerEntityAdapter.readByKey(db, trigger.getKey());
 
       if (triggerEntity != null) {
         switch (instruction) {
@@ -1206,11 +1247,13 @@ public class JobStoreImpl
    *
    * @see #triggeredJobComplete
    */
-  private void unblockTriggers(final ODatabaseDocumentTx db, final JobKey jobKey) {
+  private void unblockTriggers(final ODatabaseDocumentTx db, final JobDetail jobDetail) {
+    JobKey jobKey = jobDetail.getKey();
+
     log.trace("Unblock triggers: jobKey={}", jobKey);
 
     Iterable<TriggerEntity> matches = triggerEntityAdapter.browseWithPredicate
-        .execute(db, input -> {
+        (db, input -> {
           switch (input.getState()) {
             case BLOCKED:
             case PAUSED_BLOCKED:
@@ -1218,6 +1261,10 @@ public class JobStoreImpl
           }
           return false;
         });
+
+    if (isMultiNodeTask(jobDetail)) {
+      matches = local(matches); // multinode task; each node only needs to unblock local triggers
+    }
 
     for (TriggerEntity entity : matches) {
       if (entity.getState() == PAUSED_BLOCKED) {
@@ -1309,7 +1356,7 @@ public class JobStoreImpl
         name, calendar, replaceExisting, updateTriggers);
 
     execute(db -> {
-      CalendarEntity entity = calendarEntityAdapter.readByName.execute(db, name);
+      CalendarEntity entity = calendarEntityAdapter.readByName(db, name);
       if (entity == null) {
         // no existing entity, add new one
         entity = new CalendarEntity(name, calendar);
@@ -1325,7 +1372,7 @@ public class JobStoreImpl
 
       if (updateTriggers) {
         // update all triggers using this calender
-        for (TriggerEntity triggerEntity : triggerEntityAdapter.browseByCalendarName.execute(db, name)) {
+        for (TriggerEntity triggerEntity : triggerEntityAdapter.browseByCalendarName(db, name)) {
           triggerEntity.getValue().updateWithNewCalendar(calendar, misfireThreshold);
           triggerEntityAdapter.editEntity(db, triggerEntity);
         }
@@ -1339,26 +1386,26 @@ public class JobStoreImpl
   public boolean removeCalendar(final String name) throws JobPersistenceException {
     log.debug("Remove calendar: {}", name);
 
-    return execute(db -> calendarEntityAdapter.deleteByName.execute(db, name));
+    return execute(db -> calendarEntityAdapter.deleteByName(db, name));
   }
 
   @Override
   @Nullable
   public Calendar retrieveCalendar(final String name) throws JobPersistenceException {
     return execute(db -> {
-      CalendarEntity entity = calendarEntityAdapter.readByName.execute(db, name);
+      CalendarEntity entity = calendarEntityAdapter.readByName(db, name);
       return entity != null ? entity.getValue() : null;
     });
   }
 
   @Override
   public int getNumberOfCalendars() throws JobPersistenceException {
-    return execute(db -> calendarEntityAdapter.count.executeI(db));
+    return execute(db -> calendarEntityAdapter.countI(db));
   }
 
   @Override
   public List<String> getCalendarNames() throws JobPersistenceException {
-    return execute(db -> calendarEntityAdapter.browseNames.execute(db));
+    return execute(db -> calendarEntityAdapter.browseNames(db));
   }
 
   /**
@@ -1366,10 +1413,68 @@ public class JobStoreImpl
    */
   @Nullable
   private Calendar findCalendar(final ODatabaseDocumentTx db, final String name) {
-    CalendarEntity calendarEntity = calendarEntityAdapter.readByName.execute(db, name);
+    CalendarEntity calendarEntity = calendarEntityAdapter.readByName(db, name);
     if (calendarEntity != null) {
       return calendarEntity.getValue();
     }
     return null;
+  }
+
+  /**
+   * Helper to get locally-owned (as well as orphaned) triggers.
+   */
+  private Iterable<TriggerEntity> local(final Iterable<TriggerEntity> triggers) {
+    if (isClustered()) {
+      String localId = nodeAccess.getId();
+      Set<String> memberIds = nodeAccess.getMemberIds();
+
+      return Iterables.filter(triggers, (entity) -> {
+        JobDataMap triggerDetail = entity.getValue().getJobDataMap();
+        if (triggerDetail.containsKey(LIMIT_NODE_KEY)) {
+          // filter limited triggers to those limited to run on this node, or orphaned
+          String limitedNodeId = triggerDetail.getString(LIMIT_NODE_KEY);
+          return localId.equals(limitedNodeId) || !memberIds.contains(limitedNodeId);
+        }
+        // filter all other triggers to those "owned" by this node, or orphaned
+        String owner = triggerDetail.getString(NODE_ID);
+        return localId.equals(owner) || !memberIds.contains(owner);
+      });
+    }
+    return triggers;
+  }
+
+  /**
+   * Helper to warn when a limited trigger won't fire because its node is missing.
+   */
+  private boolean isLimitedToMissingNode(final OperableTrigger trigger) {
+    JobDataMap triggerDetail = trigger.getJobDataMap();
+    if (triggerDetail.containsKey(LIMIT_NODE_KEY)) {
+      String limitedNodeId = triggerDetail.getString(LIMIT_NODE_KEY);
+      // can skip members check here because "local()" has already filtered limited triggers down to those
+      // which are either limited to run on the current node, or on a missing node (ie. have been orphaned)
+      if (!nodeAccess.getId().equals(limitedNodeId)) {
+        // not limited to this node, so must be an orphaned trigger
+        String description = trigger.getDescription();
+        if (Strings2.isBlank(description)) {
+          description = trigger.getJobKey().getName();
+        }
+        if (Strings2.isBlank(limitedNodeId)) {
+          log.warn("Cannot run task '{}' because it is not configured for HA", description);
+        }
+        else {
+          log.warn("Cannot run task '{}' because it uses node {} which is not a member of this cluster", description,
+              limitedNodeId);
+        }
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Identifies multinode tasks (tasks that explicitly run triggers on all nodes at once).
+   */
+  private boolean isMultiNodeTask(final JobDetail jobDetail) {
+    return jobDetail.getJobDataMap().getBoolean(MULTINODE_KEY);
   }
 }

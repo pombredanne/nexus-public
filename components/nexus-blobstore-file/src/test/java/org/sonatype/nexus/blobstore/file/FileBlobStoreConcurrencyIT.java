@@ -21,10 +21,14 @@ import java.util.HashSet;
 import java.util.Queue;
 import java.util.Random;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentLinkedDeque;
 
 import org.sonatype.goodies.testsupport.TestSupport;
 import org.sonatype.goodies.testsupport.concurrent.ConcurrentRunner;
+import org.sonatype.nexus.blobstore.MetricsInputStream;
+import org.sonatype.nexus.blobstore.TemporaryLocationStrategy;
+import org.sonatype.nexus.blobstore.VolumeChapterLocationStrategy;
 import org.sonatype.nexus.blobstore.api.Blob;
 import org.sonatype.nexus.blobstore.api.BlobId;
 import org.sonatype.nexus.blobstore.api.BlobMetrics;
@@ -32,8 +36,10 @@ import org.sonatype.nexus.blobstore.api.BlobStoreConfiguration;
 import org.sonatype.nexus.blobstore.api.BlobStoreException;
 import org.sonatype.nexus.blobstore.file.internal.BlobStoreMetricsStore;
 import org.sonatype.nexus.blobstore.file.internal.BlobStoreMetricsStoreImpl;
-import org.sonatype.nexus.blobstore.file.internal.MetricsInputStream;
+import org.sonatype.nexus.blobstore.file.internal.PeriodicJobServiceImpl;
+import org.sonatype.nexus.blobstore.file.internal.SimpleFileOperations;
 import org.sonatype.nexus.common.app.ApplicationDirectories;
+import org.sonatype.nexus.common.node.NodeAccess;
 
 import com.google.common.base.Objects;
 import com.google.common.collect.ImmutableMap;
@@ -41,6 +47,7 @@ import com.google.common.io.ByteStreams;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
+import org.mockito.Mock;
 
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.io.ByteStreams.nullOutputStream;
@@ -65,15 +72,17 @@ public class FileBlobStoreConcurrencyIT
 
   private FileBlobStore underTest;
 
-  private PeriodicJobServiceImpl jobService;
-
   private BlobStoreMetricsStore metricsStore;
 
+  @Mock
+  NodeAccess nodeAccess;
 
   @Before
   public void setUp() throws Exception {
     Path root = util.createTempDir().toPath();
     Path content = root.resolve("content");
+
+    when(nodeAccess.getId()).thenReturn(UUID.randomUUID().toString());
 
     ApplicationDirectories applicationDirectories = mock(ApplicationDirectories.class);
     when(applicationDirectories.getWorkDirectory(anyString())).thenReturn(root.toFile());
@@ -81,17 +90,15 @@ public class FileBlobStoreConcurrencyIT
     final BlobStoreConfiguration config = new BlobStoreConfiguration();
     config.attributes(FileBlobStore.CONFIG_KEY).set(FileBlobStore.PATH_KEY, root.toString());
 
-    jobService = new PeriodicJobServiceImpl();
-    jobService.start();
-
-    metricsStore = new BlobStoreMetricsStoreImpl(jobService);
+    metricsStore = new BlobStoreMetricsStoreImpl(new PeriodicJobServiceImpl(), nodeAccess);
 
     this.underTest = new FileBlobStore(content,
         new VolumeChapterLocationStrategy(),
+        new TemporaryLocationStrategy(),
         new SimpleFileOperations(),
         metricsStore,
         config,
-        applicationDirectories);
+        applicationDirectories, nodeAccess);
     underTest.start();
   }
 
@@ -99,9 +106,6 @@ public class FileBlobStoreConcurrencyIT
   public void tearDown() throws Exception {
     if (underTest != null) {
       underTest.stop();
-    }
-    if (jobService != null) {
-      jobService.stop();
     }
   }
 
@@ -169,7 +173,7 @@ public class FileBlobStoreConcurrencyIT
           // There's a race condition here, we need to note that we're attempting to delete this before the deletion
           // goes through, otherwise we may fail the check, above.
           deletedIds.add(blobId);
-          underTest.delete(blobId);
+          underTest.delete(blobId, "Testing concurrency");
         }
     );
 

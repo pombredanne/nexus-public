@@ -16,7 +16,7 @@ import java.io.File;
 import java.security.cert.Certificate;
 
 import org.sonatype.goodies.testsupport.TestSupport;
-import org.sonatype.nexus.common.node.LocalNodeAccess;
+import org.sonatype.nexus.common.node.NodeAccess;
 import org.sonatype.nexus.crypto.internal.CryptoHelperImpl;
 import org.sonatype.nexus.ssl.KeyStoreManager;
 
@@ -26,9 +26,10 @@ import org.junit.Test;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.is;
 
 /**
- * Tests for {@link LocalNodeAccess}.
+ * Tests for local {@link NodeAccess}.
  */
 @SuppressWarnings("HardCodedStringLiteral")
 public class LocalNodeAccessTest
@@ -36,31 +37,36 @@ public class LocalNodeAccessTest
 {
   private KeyStoreManager keyStoreManager;
 
-  private LocalNodeAccess localNodeAccess;
+  private NodeAccess nodeAccess;
 
   @Before
   public void setUp() throws Exception {
     File dir = util.createTempDir("keystores");
-    KeyStoreManagerConfigurationImpl config = new KeyStoreManagerConfigurationImpl(dir);
+    KeyStoreManagerConfigurationImpl config = new KeyStoreManagerConfigurationImpl();
     // use lower strength for faster test execution
     config.setKeyAlgorithmSize(512);
-    keyStoreManager = new KeyStoreManagerImpl(new CryptoHelperImpl(), config);
+    keyStoreManager = new KeyStoreManagerImpl(new CryptoHelperImpl(), new KeyStoreStorageManagerImpl(dir), config);
     keyStoreManager.generateAndStoreKeyPair("a", "b", "c", "d", "e", "f");
 
-    localNodeAccess = new LocalNodeAccessImpl(keyStoreManager);
-    localNodeAccess.start();
+    nodeAccess = new LocalNodeAccess(keyStoreManager);
+    nodeAccess.start();
   }
 
   @After
   public void tearDown() throws Exception {
-    if (localNodeAccess != null) {
-      localNodeAccess.stop();
+    if (nodeAccess != null) {
+      nodeAccess.stop();
     }
   }
 
   @Test
   public void idEqualToIdentityCertificate() throws Exception {
     Certificate cert = keyStoreManager.getCertificate();
-    assertThat(localNodeAccess.getId(), equalTo(NodeIdEncoding.nodeIdForCertificate(cert)));
+    assertThat(nodeAccess.getId(), equalTo(NodeIdEncoding.nodeIdForCertificate(cert)));
+  }
+
+  @Test
+  public void localIsOldestNode() {
+    assertThat(nodeAccess.isOldestNode(), is(true));
   }
 }

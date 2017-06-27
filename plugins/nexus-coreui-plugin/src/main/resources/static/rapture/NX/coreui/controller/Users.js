@@ -27,7 +27,8 @@ Ext.define('NX.coreui.controller.Users', {
     'NX.Icons',
     'NX.Messages',
     'NX.Dialogs',
-    'NX.I18n'
+    'NX.I18n',
+    'NX.util.Filter'
   ],
   masters: [
     'nx-coreui-user-list'
@@ -73,37 +74,7 @@ Ext.define('NX.coreui.controller.Users', {
       variants: ['x16']
     }
   },
-  features: [
-    {
-      mode: 'admin',
-      path: '/Security/Users',
-      text: NX.I18n.get('User_Text'),
-      description: NX.I18n.get('User_Description'),
-      view: { xtype: 'nx-coreui-user-feature' },
-      iconConfig: {
-        file: 'group.png',
-        variants: ['x16', 'x32']
-      },
-      visible: function() {
-        return NX.Permissions.check('nexus:users:read') && NX.Permissions.check('nexus:roles:read');
-      },
-      weight: 30
-    },
-    {
-      mode: 'user',
-      path: '/Account',
-      text: NX.I18n.get('Users_Text'),
-      description: NX.I18n.get('Users_Description'),
-      view: { xtype: 'nx-coreui-user-account' },
-      iconConfig: {
-        file: 'user.png',
-        variants: ['x16', 'x32']
-      },
-      visible: function() {
-        return NX.Security.hasUser();
-      }
-    }
-  ],
+
   permission: 'nexus:users',
 
   /**
@@ -112,12 +83,48 @@ Ext.define('NX.coreui.controller.Users', {
   init: function() {
     var me = this;
 
+    me.features = [
+      {
+        mode: 'admin',
+        path: '/Security/Users',
+        text: NX.I18n.get('User_Text'),
+        description: NX.I18n.get('User_Description'),
+        view: {xtype: 'nx-coreui-user-feature'},
+        iconConfig: {
+          file: 'group.png',
+          variants: ['x16', 'x32']
+        },
+        visible: function() {
+          return NX.Permissions.check('nexus:users:read') && NX.Permissions.check('nexus:roles:read');
+        },
+        weight: 30
+      },
+      {
+        mode: 'user',
+        path: '/Account',
+        text: NX.I18n.get('Users_Text'),
+        description: NX.I18n.get('Users_Description'),
+        view: {xtype: 'nx-coreui-user-account'},
+        iconConfig: {
+          file: 'user.png',
+          variants: ['x16', 'x32']
+        },
+        visible: function() {
+          return NX.Security.hasUser();
+        }
+      }
+    ];
+
     me.callParent();
 
     me.listen({
       controller: {
         '#Refresh': {
           refresh: me.loadStores
+        },
+        '*': {
+          userSettingsAddTab: me.addTab,
+          userSettingsRemoveTab: me.removeTab
         }
       },
       store: {
@@ -381,12 +388,11 @@ Ext.define('NX.coreui.controller.Users', {
         list = me.getList(),
         userSourceButton = list.down('button[action=filter]'),
         userId = me.getUserSearchBox().getValue(),
-        emptyText;
+        emptyText = '';
 
-    emptyText = '<div class="x-grid-empty">';
     if (userSourceButton.sourceId === 'default') {
       if (userId) {
-        emptyText += 'No user matched query criteria "' + userId + '"';
+        emptyText += 'No user matched query criteria "$filter"';
       }
       else {
         emptyText += 'No users defined';
@@ -395,12 +401,11 @@ Ext.define('NX.coreui.controller.Users', {
     else {
       emptyText += 'No ' + userSourceButton.getText() + ' user matched query criteria';
       if (userId) {
-        emptyText += ' "' + userId + '"';
+        emptyText += ' "$filter"';
       }
     }
-    emptyText += '</div>';
 
-    list.getView().emptyText = emptyText;
+    list.getView().emptyText = NX.util.Filter.buildEmptyResult(userId, emptyText);
   },
 
   /**

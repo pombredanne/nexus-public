@@ -36,12 +36,12 @@ import com.google.common.base.Function;
 import com.google.common.base.Joiner;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterables;
-import com.google.common.net.HttpHeaders;
 import org.apache.http.HttpHost;
 import org.apache.http.auth.AuthScope;
 import org.apache.http.auth.Credentials;
 import org.apache.http.auth.NTCredentials;
 import org.apache.http.auth.UsernamePasswordCredentials;
+import org.apache.http.client.config.CookieSpecs;
 import org.apache.http.impl.client.StandardHttpRequestRetryHandler;
 
 import static com.google.common.base.Preconditions.checkNotNull;
@@ -138,12 +138,20 @@ public class ConfigurationCustomizer
     }
 
     if (connection.getUserAgentSuffix() != null) {
-      checkState(plan.getUserAgent() != null, "Default User-Agent not set");
-      plan.getHeaders().put(HttpHeaders.USER_AGENT, plan.getUserAgent() + " " + connection.getUserAgentSuffix());
+      checkState(plan.getUserAgentBase() != null, "Default User-Agent not set");
+      plan.setUserAgentSuffix(connection.getUserAgentSuffix());
     }
 
     if (Boolean.TRUE.equals(connection.getUseTrustStore())) {
       plan.getAttributes().put(SSLContextSelector.USE_TRUST_STORE, Boolean.TRUE);
+    }
+
+    if (Boolean.TRUE.equals(connection.getEnableCircularRedirects())) {
+      plan.getRequest().setCircularRedirectsAllowed(true);
+    }
+
+    if (Boolean.TRUE.equals(connection.getEnableCookies())) {
+      plan.getRequest().setCookieSpec(CookieSpecs.DEFAULT);
     }
   }
 

@@ -17,11 +17,15 @@ import java.net.URI;
 
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
+import javax.inject.Inject;
+import javax.inject.Named;
 import javax.validation.constraints.NotNull;
 
 import org.sonatype.goodies.common.Time;
+import org.sonatype.nexus.repository.BadRequestException;
 import org.sonatype.nexus.repository.FacetSupport;
 import org.sonatype.nexus.repository.InvalidContentException;
+import org.sonatype.nexus.repository.Repository;
 import org.sonatype.nexus.repository.cache.CacheController;
 import org.sonatype.nexus.repository.cache.CacheControllerHolder;
 import org.sonatype.nexus.repository.cache.CacheInfo;
@@ -29,12 +33,17 @@ import org.sonatype.nexus.repository.cache.NegativeCacheFacet;
 import org.sonatype.nexus.repository.config.Configuration;
 import org.sonatype.nexus.repository.config.ConfigurationFacet;
 import org.sonatype.nexus.repository.httpclient.HttpClientFacet;
+import org.sonatype.nexus.repository.httpclient.RemoteBlockedIOException;
+import org.sonatype.nexus.repository.storage.MissingBlobException;
+import org.sonatype.nexus.repository.storage.RetryDeniedException;
 import org.sonatype.nexus.repository.view.Content;
 import org.sonatype.nexus.repository.view.Context;
 import org.sonatype.nexus.repository.view.payloads.HttpEntityPayload;
+import org.sonatype.nexus.validation.constraint.Url;
 
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Strings;
+import com.google.common.io.Closeables;
 import com.google.common.net.HttpHeaders;
 import org.apache.http.Header;
 import org.apache.http.HttpEntity;
@@ -64,8 +73,9 @@ public abstract class ProxyFacetSupport
   static final String CONFIG_KEY = "proxy";
 
   @VisibleForTesting
-  static class Config
+  public static class Config
   {
+    @Url
     @NotNull
     public URI remoteUrl;
 
@@ -97,6 +107,26 @@ public abstract class ProxyFacetSupport
   private boolean remoteUrlChanged;
 
   protected CacheControllerHolder cacheControllerHolder;
+
+  private Cooperation<Content> contentCooperation;
+
+  /**
+   * Configures content {@link Cooperation} for this proxy; a {@code passiveTimeout} of 0 disables cooperation.
+   *
+   * @param passiveTimeout used when passively cooperating on an initial download
+   * @param activeTimeout used when actively cooperating on a download dependency
+   *
+   * @since 3.4
+   */
+  @Inject
+  protected void configureCooperation(
+      @Named("${nexus.proxy.passiveCooperationTimeout:-600s}") final Time passiveTimeout,
+      @Named("${nexus.proxy.activeCooperationTimeout:-10s}") final Time activeTimeout)
+  {
+    if (passiveTimeout.value() > 0) {
+      this.contentCooperation = new Cooperation<>(passiveTimeout, activeTimeout);
+    }
+  }
 
   @Override
   protected void doValidate(final Configuration configuration) throws Exception {
@@ -157,27 +187,113 @@ public abstract class ProxyFacetSupport
   public Content get(final Context context) throws IOException {
     checkNotNull(context);
 
-    final Content content = getCachedContent(context);
-
-    if (isStale(context, content)) {
-      try {
-        final Content remote = fetch(context, content);
-        if (remote != null) {
-          return store(context, remote);
+    Content content = maybeGetCachedContent(context);
+    if (!isStale(context, content)) {
+      return content;
+    }
+    if (contentCooperation == null) {
+      return doGet(context, content);
+    }
+    return contentCooperation.cooperate(getRequestKey(context), (checkCache) -> {
+      Content latestContent = content;
+      if (checkCache) {
+        latestContent = maybeGetCachedContent(context);
+        if (!isStale(context, latestContent)) {
+          return latestContent;
         }
       }
-      catch (ProxyServiceException | IOException e) {
-        log.warn("Failed to fetch: {}", getUrl(context), e);
-        throw e;
+      return doGet(context, latestContent);
+    });
+  }
+
+  /**
+   * @since 3.4
+   */
+  protected Content doGet(final Context context, @Nullable final Content staleContent) throws IOException {
+    Content remote = null, content = staleContent;
+
+    try {
+      remote = fetch(context, content);
+      if (remote != null) {
+        content = store(context, remote);
+        if (contentCooperation != null && remote.equals(content)) {
+          // remote wasn't stored; make reusable copy for cooperation
+          content = new TempContent(remote);
+        }
       }
     }
+    catch (ProxyServiceException e) {
+      int sc = e.getHttpResponse().getStatusLine().getStatusCode();
+      String repoName = this.getRepository().getName();
+      String contextUrl = getUrl(context);
+      log.trace("Proxy repo {} received status {} attempting to retrieve resource {}", repoName, sc, contextUrl, e);
+      logContentOrThrow(content, contextUrl, e);
+    }
+    catch (RemoteBlockedIOException e) {
+      Repository repository = context.getRepository();
+      log.trace("Failed to fetch: {} from repository: {} - {}", getUrl(context), repository.getName(), e);
+      logContentOrThrow(content, getUrl(context), e);
+    }
+    catch (IOException e) {
+      Repository repository = context.getRepository();
+      log.trace("Failed to fetch: {} from repository: {}", getUrl(context), repository.getName(), e);
+      logContentOrThrow(content, getUrl(context), e);
+    }
+    finally {
+      if (remote != null && !remote.equals(content)) {
+        Closeables.close(remote, true);
+      }
+    }
+
     return content;
+  }
+
+  /**
+   * Path + query parameters provide a unique enough request key for known formats.
+   * If a format needs to add more context then they should customize this method.
+   *
+   * @return key that uniquely identifies this upstream request from other contexts
+   *
+   * @since 3.4
+   */
+  protected String getRequestKey(final Context context) {
+    return context.getRequest().getPath() + '?' + context.getRequest().getParameters();
+  }
+
+  private <X extends Throwable> void logContentOrThrow(@Nullable final Content content,
+                                                       final String contextUrl,
+                                                       final X exception) throws X
+  {
+    log.debug("Unable to check remote for updates.");
+    if (content != null) {
+      log.debug("Returning content {} from cache.", contextUrl);
+    }
+    else {
+      log.warn("Content not present for {}, throwing exception.", contextUrl);
+      throw exception;
+    }
   }
 
   @Override
   public void invalidateProxyCaches() {
     log.info("Invalidating proxy caches of {}", getRepository().getName());
     cacheControllerHolder.invalidateCaches();
+  }
+
+  private Content maybeGetCachedContent(Context context) throws IOException {
+    try {
+      return getCachedContent(context);
+    }
+    catch (RetryDeniedException e) {
+      if (e.getCause() instanceof MissingBlobException) {
+        log.warn("Unable to find blob {} for {}, will check remote", ((MissingBlobException) e.getCause()).getBlobRef(),
+            getUrl(context));
+        return null;
+      }
+      else {
+        throw e;
+      }
+    }
   }
 
   /**
@@ -205,7 +321,17 @@ public abstract class ProxyFacetSupport
   protected Content fetch(String url, Context context, @Nullable Content stale) throws IOException {
     HttpClient client = httpClient.getHttpClient();
 
-    URI uri = config.remoteUrl.resolve(url);
+    checkState(config.remoteUrl.isAbsolute(),
+        "Invalid remote URL '%s' for proxy repository %s, please fix your configuration", config.remoteUrl,
+        getRepository().getName());
+    URI uri;
+    try {
+      uri = config.remoteUrl.resolve(url);
+    }
+    catch (IllegalArgumentException e) { // NOSONAR
+      log.warn("Unable to resolve url. Reason: {}", e.getMessage());
+      throw new BadRequestException("Invalid repository path");
+    }
     HttpRequestBase request = buildFetchHttpRequest(uri, context);
     if (stale != null) {
       final DateTime lastModified = stale.getAttributes().get(Content.CONTENT_LAST_MODIFIED, DateTime.class);

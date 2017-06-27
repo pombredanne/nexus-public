@@ -12,10 +12,9 @@
  */
 package org.sonatype.nexus.rest.client;
 
-import javax.annotation.Nullable;
+import java.net.URI;
 
-import org.jboss.resteasy.client.jaxrs.ResteasyClient;
-import org.jboss.resteasy.client.jaxrs.ResteasyClientBuilder;
+import javax.ws.rs.client.Client;
 
 /**
  * REST client factory.
@@ -24,14 +23,17 @@ import org.jboss.resteasy.client.jaxrs.ResteasyClientBuilder;
  */
 public interface RestClientFactory
 {
-  // NOTE: Exposing RestEASY api here to simplify advanced client semantics
 
-  interface Customizer
-  {
-    void apply(ResteasyClientBuilder builder);
+  Client create(RestClientConfiguration configuration);
+
+  default Client create() {
+    return create(RestClientConfiguration.DEFAULTS);
   }
 
-  ResteasyClient create(@Nullable Customizer customizer);
-
-  ResteasyClient create();
+  /**
+   * Returns a proxy backed by the given client and URI.
+   *
+   * @since 3.2.1
+   */
+  <T> T proxy(Class<T> api, Client client, URI baseUri);
 }

@@ -20,19 +20,19 @@ import javax.validation.constraints.NotNull
 import javax.validation.groups.Default
 
 import org.sonatype.nexus.common.entity.DetachedEntityId
-import org.sonatype.nexus.extdirect.DirectComponent
 import org.sonatype.nexus.extdirect.DirectComponentSupport
-import org.sonatype.nexus.repository.selector.SelectorPreview
-import org.sonatype.nexus.selector.JexlSelector
+import org.sonatype.nexus.selector.JexlExpressionValidator
 import org.sonatype.nexus.selector.SelectorConfiguration
-import org.sonatype.nexus.selector.SelectorConfigurationStore
+import org.sonatype.nexus.selector.SelectorManager
+import org.sonatype.nexus.validation.ConstraintViolationFactory
 import org.sonatype.nexus.validation.Validate
 import org.sonatype.nexus.validation.group.Create
 import org.sonatype.nexus.validation.group.Update
 
+import com.codahale.metrics.annotation.ExceptionMetered
+import com.codahale.metrics.annotation.Timed
 import com.softwarementors.extjs.djn.config.annotations.DirectAction
 import com.softwarementors.extjs.djn.config.annotations.DirectMethod
-import org.apache.shiro.authz.annotation.RequiresAuthentication
 import org.apache.shiro.authz.annotation.RequiresPermissions
 import org.hibernate.validator.constraints.NotEmpty
 
@@ -49,32 +49,42 @@ class SelectorComponent
 {
 
   @Inject
-  SelectorConfigurationStore store
+  SelectorManager selectorManager
+
+  @Inject
+  ConstraintViolationFactory constraintViolationFactory
+
+  @Inject
+  JexlExpressionValidator jexlExpressionValidator
 
   /**
    * @return a list of selectors
    */
   @DirectMethod
+  @Timed
+  @ExceptionMetered
   @RequiresPermissions('nexus:selectors:read')
   List<SelectorXO> read() {
-    return store.browse().collect { asSelector(it) }
+    return selectorManager.browse().collect { asSelector(it) }
   }
 
   /**
    * Creates a selector.
    */
   @DirectMethod
-  @RequiresAuthentication
+  @Timed
+  @ExceptionMetered
+  @RequiresPermissions('nexus:selectors:create')
   @Validate(groups = [Create.class, Default.class])
   SelectorXO create(final @NotNull @Valid SelectorXO selectorXO) {
-    validateExpressionOrThrow(selectorXO.expression)
+    jexlExpressionValidator.validate(selectorXO.expression)
     def configuration = new SelectorConfiguration(
         name: selectorXO.name,
         type: selectorXO.type,
         description: selectorXO.description,
         attributes: ['expression': selectorXO.expression]
     )
-    store.create(configuration)
+    selectorManager.create(configuration)
     return asSelector(configuration)
   }
 
@@ -82,11 +92,13 @@ class SelectorComponent
    * Updates a selector.
    */
   @DirectMethod
-  @RequiresAuthentication
+  @Timed
+  @ExceptionMetered
+  @RequiresPermissions('nexus:selectors:update')
   @Validate(groups = [Update.class, Default.class])
   SelectorXO update(final @NotNull @Valid SelectorXO selectorXO) {
-    validateExpressionOrThrow(selectorXO.expression)
-    store.update(store.read(new DetachedEntityId(selectorXO.id)).with {
+    jexlExpressionValidator.validate(selectorXO.expression)
+    selectorManager.update(selectorManager.read(new DetachedEntityId(selectorXO.id)).with {
       description = selectorXO.description
       attributes = ['expression': selectorXO.expression]
       return it
@@ -98,23 +110,23 @@ class SelectorComponent
    * Deletes a selector.
    */
   @DirectMethod
-  @RequiresAuthentication
+  @Timed
+  @ExceptionMetered
+  @RequiresPermissions('nexus:selectors:delete')
   @Validate
   void remove(final @NotEmpty String id) {
-    store.delete(store.read(new DetachedEntityId(id)))
-  }
-
-  @DirectMethod
-  List<ReferenceXO> readContentTypes() {
-    return SelectorPreview.ContentType.values().collect { c -> new ReferenceXO(id: c, name: c) }
+    selectorManager.delete(selectorManager.read(new DetachedEntityId(id)))
   }
 
   /**
    * Retrieve a list of available selector references.
    */
   @DirectMethod
+  @Timed
+  @ExceptionMetered
+  @RequiresPermissions('nexus:selectors:read')
   List<ReferenceXO> readReferences() {
-    return store.browse().collect { new ReferenceXO(id: it.name, name: it.name) }
+    return selectorManager.browse().collect { new ReferenceXO(id: it.name, name: it.name) }
   }
 
   static SelectorXO asSelector(final SelectorConfiguration configuration) {
@@ -125,12 +137,5 @@ class SelectorComponent
         description: configuration.description,
         expression: configuration.attributes['expression']
     )
-  }
-
-  /**
-   * Convenience method to validate a JEXL expression or throw an exception on error.
-   */
-  static void validateExpressionOrThrow(String expression) {
-    new JexlSelector(expression)
   }
 }

@@ -21,6 +21,7 @@ Ext.define('NX.coreui.controller.Assets', {
   extend: 'NX.app.Controller',
   requires: [
     'NX.Bookmarks',
+    'NX.Dialogs',
     'NX.I18n',
     'Ext.util.Format'
   ],
@@ -30,7 +31,8 @@ Ext.define('NX.coreui.controller.Assets', {
     'component.AssetInfo',
     'component.AssetAttributes',
     'component.AssetList',
-    'component.ComponentDetails'
+    'component.ComponentDetails',
+    'component.AnalyzeApplicationWindow'
   ],
 
   refs: [
@@ -40,7 +42,10 @@ Ext.define('NX.coreui.controller.Assets', {
     {ref: 'deleteAssetButton', selector: 'nx-coreui-component-assetcontainer button[action=deleteAsset]'},
     {ref: 'componentList', selector: 'grid[componentList=true]'},
     {ref: 'componentDetails', selector: 'nx-coreui-component-details'},
-    {ref: 'deleteComponentButton', selector: 'nx-coreui-component-details button[action=deleteComponent]'}
+    {ref: 'deleteComponentButton', selector: 'nx-coreui-component-details button[action=deleteComponent]'},
+    {ref: 'analyzeApplicationButton', selector: 'nx-coreui-component-details button[action=analyzeApplication]'},
+    {ref: 'analyzeApplicationWindow', selector: 'nx-coreui-component-analyze-window'},
+    {ref: 'rootContainer', selector: 'nx-main'}
   ],
 
   /**
@@ -84,6 +89,15 @@ Ext.define('NX.coreui.controller.Assets', {
         },
         'nx-coreui-component-details button[action=deleteComponent]': {
           click: me.deleteComponent
+        },
+        'nx-coreui-component-details button[action=analyzeApplication]': {
+          click: me.openAnalyzeApplicationWindow
+        },
+        'nx-coreui-component-analyze-window button[action=analyze]': {
+          click: me.analyzeAsset
+        },
+        'nx-coreui-component-analyze-window combobox[name="asset"]': {
+          select: me.selectedApplicationChanged
         }
       }
     });
@@ -214,7 +228,7 @@ Ext.define('NX.coreui.controller.Assets', {
    * @private
    */
   bindDeleteComponentButton: function(button) {
-    this.bindDeleteButton(button, this.getComponentDetails().componentModel.get('repositoryName'));
+    this.bindButton(button, this.getComponentDetails().componentModel.get('repositoryName'));
   },
 
   /**
@@ -223,7 +237,7 @@ Ext.define('NX.coreui.controller.Assets', {
    * @private
    */
   bindDeleteAssetButton: function(button) {
-    this.bindDeleteButton(button, this.getAssetContainer().assetModel.get('repositoryName'));
+    this.bindButton(button, this.getAssetContainer().assetModel.get('repositoryName'));
   },
 
   /**
@@ -234,22 +248,13 @@ Ext.define('NX.coreui.controller.Assets', {
    *
    * @private
    */
-  bindDeleteButton: function(button, repositoryName) {
+  bindButton: function(button, repositoryName) {
     var repositoryStore = this.repositoryStore,
         repository,
         showButtonFunction = function(repository) {
           if (repository && repository.get('type') !== 'group') {
             button.show();
-            button.mon(
-                NX.Conditions.isPermitted(
-                    'nexus:repository-view:' + repository.get('format') + ':' + repository.get('name') + ':delete'
-                ),
-                {
-                  satisfied: button.enable,
-                  unsatisfied: button.disable,
-                  scope: button
-                }
-            );
+            button.enable();
           }
         };
 
@@ -285,7 +290,7 @@ Ext.define('NX.coreui.controller.Assets', {
         NX.direct.coreui_Component.deleteComponent(componentModel.getId(), repositoryName, function(response) {
           if (Ext.isObject(response) && response.success) {
             componentList.getSelectionModel().deselectAll();
-            NX.Bookmarks.navigateTo(NX.Bookmarks.fromSegments(NX.Bookmarks.getBookmark().getSegments().slice(0, -1)));
+            NX.Bookmarks.navigateBackSegments(NX.Bookmarks.getBookmark(), 1);
             // delay refresh of component list because in case of search results it takes a while till removal is
             // propagated to elastic search results. Not 100% but better then still showing
             setTimeout(function() {
@@ -295,6 +300,103 @@ Ext.define('NX.coreui.controller.Assets', {
           }
         });
       });
+    }
+  },
+
+  /**
+   * Open the analyze application form window
+   *
+   * @private
+   */
+  openAnalyzeApplicationWindow: function() {
+    var me = this,
+        componentDetails = me.getComponentDetails(),
+        componentId = componentDetails.componentModel.getId(),
+        repositoryName = componentDetails.componentModel.get('repositoryName');
+
+    function doOpenAnalyzeWindow(response) {
+      var widget = Ext.widget('nx-coreui-component-analyze-window');
+      var form = widget.down('form');
+      form.getForm().setValues(response.data);
+      //I am setting the original value so it won't be marked dirty unless user touches it
+      form.down('textfield[name="reportLabel"]').originalValue = response.data.reportLabel;
+
+      var assetKeys = response.data.assetMap ? Ext.Object.getKeys(response.data.assetMap) : [];
+
+      if (assetKeys.length < 1) {
+        widget.close();
+        NX.Dialogs.showError(NX.I18n.get('AnalyzeApplicationWindow_No_Assets_Error_Title'),
+            NX.I18n.get('AnalyzeApplicationWindow_No_Assets_Error_Message'));
+      }
+      else if (assetKeys.length === 1) {
+        widget.down('combo[name="asset"]').setValue(response.data.selectedAsset);
+      }
+      else {
+        var data = [];
+        for (var i = 0; i < assetKeys.length; i++) {
+          data.push([assetKeys[i], response.data.assetMap[assetKeys[i]]]);
+        }
+        var combo = widget.down('combo[name="asset"]');
+        combo.getStore().loadData(data, false);
+        combo.setValue(response.data.selectedAsset);
+        combo.show();
+      }
+    }
+
+    me.getRootContainer().getEl().mask(NX.I18n.get('AnalyzeApplicationWindow_Loading_Mask'));
+    NX.direct.ahc_Component.getPredefinedValues(componentId, repositoryName, function(response) {
+      me.getRootContainer().getEl().unmask();
+      if (Ext.isObject(response) && response.success) {
+        if (response.data.tosAccepted) {
+          doOpenAnalyzeWindow(response);
+        }
+        else {
+          Ext.widget('nx-coreui-healthcheck-eula', {
+            acceptFn: function() {
+              NX.direct.ahc_Component.acceptTermsOfService(function() {
+                doOpenAnalyzeWindow(response);
+              });
+            }
+          });
+        }
+      }
+    });
+  },
+
+  /**
+   * Analyze a component using the AHC service
+   *
+   * @private
+   */
+  analyzeAsset: function(button) {
+    var me = this,
+        componentDetails = me.getComponentDetails(),
+        win = button.up('window'),
+        form = button.up('form'),
+        formValues = form.getForm().getValues(),
+        repositoryName = componentDetails.componentModel.get('repositoryName'),
+        assetId = form.down('combo[name="asset"]').getValue();
+
+    NX.direct.ahc_Component.analyzeAsset(repositoryName, assetId, formValues.emailAddress, formValues.password,
+        formValues.proprietaryPackages, formValues.reportLabel, function(response) {
+      if (Ext.isObject(response) && response.success) {
+        win.close();
+        NX.Messages.add({text: NX.I18n.get('ComponentDetails_Analyze_Success'), type: 'success'});
+      }
+    });
+  },
+
+  /**
+   * When app changes, update the reportName as well
+   */
+  selectedApplicationChanged: function(combo) {
+    var me = this,
+        labelField = me.getAnalyzeApplicationWindow().down('textfield[name="reportLabel"]');
+
+    if (!labelField.isDirty()) {
+      //I am setting the original value so it won't be marked dirty unless user touches it
+      labelField.originalValue = combo.getRawValue();
+      labelField.setValue(combo.getRawValue());
     }
   },
 
@@ -313,12 +415,38 @@ Ext.define('NX.coreui.controller.Assets', {
         NX.direct.coreui_Component.deleteAsset(asset.getId(), asset.get('repositoryName'), function (response) {
           if (Ext.isObject(response) && response.success) {
             assetList.getSelectionModel().deselectAll();
-            assetList.getStore().load();
-            Ext.util.History.back();
+            //Manually managing sync'ing the local AssetStore as AssetStore.load() won't run a callback if the load
+            //results in no data being returned.
+            var assetStore = assetList.getStore();
+            assetStore.remove(assetStore.findRecord('id', asset.getId()));
+            me.navigateBackOnAssetDelete(asset.get('componentId'), assetStore);
             NX.Messages.add({text: NX.I18n.format('AssetInfo_Delete_Success', asset.get('name')), type: 'success'});
           }
         });
       });
+    }
+  },
+
+  /**
+   * Decide whether or not we should navigate back to a parent Component or to the prior page.
+   * @private
+   * @param {String} componentId
+   * @param {Ext.data.Store} assetStore 
+   */
+  navigateBackOnAssetDelete: function(componentId, assetStore) {
+    var me = this;
+    if (!me.getComponentDetails() || !componentId || assetStore.find('componentId', componentId) > -1) {
+      // Asset being deleted either does not have an associated component in scope, or is not the last Asset
+      //<if debug>
+      me.logDebug('Asset deleted with no component in scope or as last remaining asset');
+      //</if>
+      Ext.util.History.back();
+    }
+    else {
+      //<if debug>
+      me.logDebug('Asset deleted with component in scope');
+      //</if>
+      NX.Bookmarks.navigateBackSegments(NX.Bookmarks.getBookmark(), 2);
     }
   }
 
